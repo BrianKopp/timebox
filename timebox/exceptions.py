@@ -1,0 +1,2 @@
+class TagIdentifierByteRepresentationError(TypeError):
+    pass
