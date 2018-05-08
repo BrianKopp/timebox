@@ -1,2 +1,2 @@
-# timebox
-Blazing fast time-series data store
+# TimeBox
+Blazing fast time-series data store built on numpy
