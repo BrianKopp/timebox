@@ -40,12 +40,16 @@ def get_type_char_char(type_char_or_int):
         else:
             raise CharConversionException('Could not convert string \'{}\'into '
                                           'char because its length was > 1'.format(type_char_or_int))
-    raise CharConversionException(
-        'Could not convert type: {} for value: {}'.format(
-            type(type_char_or_int),
-            type_char_or_int
+    # last ditch, try to cast it as int
+    try:
+        return chr(int(type_char_or_int))
+    except TypeError:
+        raise CharConversionException(
+            'Could not convert type: {} for value: {}'.format(
+                type(type_char_or_int),
+                type_char_or_int
+            )
         )
-    )
 
 
 def get_numpy_type(type_char, size: int) -> np.dtype:

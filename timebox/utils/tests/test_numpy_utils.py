@@ -24,7 +24,7 @@ class TestNumpyUtils(unittest.TestCase):
             get_type_char_int([])
         with self.assertRaises(CharConversionException):
             get_type_char_int({})
-        with self.assertRaises(ValueError):
+        with self.assertRaises(CharConversionException):
             get_type_char_int(0.5)
         with self.assertRaises(CharConversionException):
             get_type_char_int(None)

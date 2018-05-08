@@ -10,7 +10,7 @@ def ensure_int(value):
         raise NotIntegerException(
             'Value {} provided is not an integer value'.format(value)
         )
-    except ValueError:
+    except (ValueError, TypeError):
         raise NotIntegerException(
             'Could not cast value {} to integer'.format(value)
         )

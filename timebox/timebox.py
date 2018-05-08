@@ -1,11 +1,18 @@
 import numpy as np
+import os
+import time
+from fcntl import flock, LOCK_EX, LOCK_SH, LOCK_UN, LOCK_NB
 from .utils.numpy_utils import get_numpy_type, get_type_char_int
 from .utils.validation import ensure_int
 from .utils.exceptions import NotIntegerException
 from .utils.binary import determine_required_bytes
 from .constants import *
 from .tag_info import TagInfo
-from .exceptions import TagIdentifierByteRepresentationError
+from .exceptions import *
+
+
+MAX_WRITE_BLOCK_WAIT_SECONDS = 60
+MAX_READ_BLOCK_WAIT_SECONDS = 30
 
 
 class TimeBox:
@@ -19,6 +26,9 @@ class TimeBox:
     _seconds_between_points = 0
     _bytes_per_date_differential = 0
     _date_differential_units = 0
+    _data = {}  # like { tag_identifier: numpy array }
+    _MAX_WRITE_BLOCK_WAIT_SECONDS = MAX_WRITE_BLOCK_WAIT_SECONDS
+    _MAX_READ_BLOCK_WAIT_SECONDS = MAX_READ_BLOCK_WAIT_SECONDS
 
     def __init__(self, file_path: str):
         self._file_path = file_path
@@ -31,7 +41,7 @@ class TimeBox:
         :param from_bytes: string representation of 1 binary byte read from a file
         :return: integer
         """
-        return int.from_bytes(from_bytes, byteorder='big', signed=False)
+        return int.from_bytes(from_bytes, byteorder='little', signed=False)
 
     @classmethod
     def _get_tag_info_dtype(cls, num_bytes_for_tag_identifier: int, tag_identifier_is_string: bool) -> np.dtype:
@@ -110,7 +120,7 @@ class TimeBox:
         if self._date_differentials_stored:
             self._seconds_between_points = 0
             self._bytes_per_date_differential = TimeBox._read_unsigned_int(file_handle.read(1))
-            self._date_differential_units = TimeBox._read_unsigned_int(file_handle.read(1))
+            self._date_differential_units = chr(TimeBox._read_unsigned_int(file_handle.read(1)))
             bytes_seek += 2
         else:
             self._seconds_between_points = TimeBox._read_unsigned_int(file_handle.read(4))
@@ -124,9 +134,11 @@ class TimeBox:
         Stores the bit-options in a 16-bit integer
         :return: int, no more than 16 bits
         """
-        options = 1 if self._tag_names_are_strings else 0
+        # note, this needs to be in the opposite order as _unpack_options
+        options = 0
+        options |= 1 if self._date_differentials_stored else 0
         options <<= 1
-        options |= 1 if self._date_differential_units else 0
+        options |= 1 if self._tag_names_are_strings else 0
         return options
 
     def _update_required_bytes_for_tag_identifier(self):
@@ -167,7 +179,7 @@ class TimeBox:
         """
         np.array([np.uint8(self._timebox_version)], dtype=np.uint8).tofile(file_handle)
         np.array([np.uint16(self._encode_options())], dtype=np.uint16).tofile(file_handle)
-        np.array([np.uint8(self._num_tags)], dtype=np.uint8).tofile(file_handle)
+        np.array([np.uint8(len(self._tag_definitions))], dtype=np.uint8).tofile(file_handle)
         np.array([np.uint32(self._num_points)], dtype=np.uint32).tofile(file_handle)
 
         self._update_required_bytes_for_tag_identifier()
@@ -183,10 +195,150 @@ class TimeBox:
 
         if self._date_differentials_stored:
             np.array([np.uint8(self._bytes_per_date_differential)], dtype=np.uint8).tofile(file_handle)
-            np.array([np.uint8(self._date_differential_units)], dtype=np.uint8).tofile(file_handle)
+            np.array([np.uint8(ord(self._date_differential_units))], dtype=np.uint8).tofile(file_handle)
             bytes_seek += 2
         else:
             np.array([np.uint32(self._seconds_between_points)], dtype=np.uint32).tofile(file_handle)
             bytes_seek += 4
 
         return bytes_seek
+
+    def _validate_data_for_write(self):
+        """
+        This method checks the data to ensure that the tag data is within date ranges, etc.
+        :return: void
+        """
+        if len(self._tag_definitions) != len(self._data):
+            raise DataDoesNotMatchTagDefinitionError('Tag definition length is different than tag data length')
+        if len([t for t in self._tag_definitions if t not in self._data]) > 0:
+            raise DataDoesNotMatchTagDefinitionError('Tag identifier in tag definitions not found in data')
+        for t in self._tag_definitions:
+            if self._data[t].dtype != self._tag_definitions[t].dtype:
+                raise DataDoesNotMatchTagDefinitionError('Data for tag {} does not have correct '
+                                                    'dtype {}'.format(t, self._tag_definitions[t].dtype))
+        return
+
+    def _write_tag_data(self, file_handle) -> int:
+        """
+        writes out the tag data, first writing the booleans then writing the actual data
+        :param file_handle: file handle object in 'wb' mode, pre-seeked to correct position
+        :return: int, seek bytes advanced in this method
+        """
+        self._validate_data_for_write()
+        seek_bytes = 0
+
+        # then write out file data
+        for t in self._data:
+            seek_bytes += self._data[t].nbytes
+            self._data[t].tofile(file_handle)
+        return seek_bytes
+
+    def _read_tag_data(self, file_handle) -> int:
+        """
+        reads in tag data from the file handle
+        :param file_handle: file handle in 'rb' mode, pre-seeked to the correct starting position
+        :return: int, seek bytes advanced in this method
+        """
+        seek_bytes = 0
+        self._data = {}
+        for t in self._tag_definitions:
+            seek_bytes += self._num_points * self._tag_definitions[t].bytes_per_value
+            self._data[t] = np.fromfile(
+                file_handle,
+                dtype=get_numpy_type(self._tag_definitions[t].type_char, 8 * self._tag_definitions[t].bytes_per_value),
+                count=self._num_points
+            )
+        return seek_bytes
+
+    def _blocking_file_name(self) -> str:
+        """
+        returns a file blocking name
+        :return: file name of blocking file
+        """
+        return '{}.lock'.format(self._file_path)
+
+    def _get_fcntl_lock(self, mode: str = 'r'):
+        """
+        gets a lock of type 'w' (writing) or 'r' (reading). throws error if can't get lock in time
+        this is a blocking function, but doesn't block for more than the specified
+        _MAX_READ/WRITE_BLOCK_WAIT_SECONDS.
+        :param mode: single char, 'w' or 'r'
+        :return: file handle if succeeded, raise exception if failed
+        """
+        if mode not in ['r', 'w']:
+            raise ValueError('Could not get fcntl lock because mode specified was invalid: {}'.format(mode))
+        block_file_name = self._blocking_file_name()
+        count = 0
+        sleep_seconds = 0.1
+        file_locked = False
+        handle = open(self._file_path, 'rb' if mode is 'r' else 'wb')
+        if mode == 'r':
+            # check and see if a blocking file exists, meaning we're waiting for a write job to clear
+            # then try to get the lock
+            while not file_locked and count < (self._MAX_READ_BLOCK_WAIT_SECONDS / sleep_seconds):
+                if not os.path.exists(block_file_name):
+                    try:
+                        flock(handle, LOCK_SH | LOCK_NB)
+                        file_locked = True
+                    except IOError:
+                        pass
+                count += 1
+                time.sleep(sleep_seconds)
+        if mode == 'w':
+            block_file_is_mine = False
+            while not file_locked and count < (self._MAX_WRITE_BLOCK_WAIT_SECONDS / sleep_seconds):
+                if not os.path.exists(block_file_name):
+                    # put a blocking file
+                    open(block_file_name, 'w').close()
+                    block_file_is_mine = True
+                if block_file_is_mine and os.path.exists(block_file_name):
+                    try:
+                        flock(handle, LOCK_EX | LOCK_NB)
+                        file_locked = True
+                    except IOError:
+                        pass
+                count += 1
+                time.sleep(sleep_seconds)
+            if not file_locked and block_file_is_mine and os.path.exists(block_file_name):
+                os.remove(block_file_name)
+        if not file_locked:
+            handle.close()
+            raise CouldNotAcquireFileLockError
+        return handle
+
+    def read(self):
+        """
+        This function reads the entire file contents into memory.
+        Later it can be improved to only read certain tags/dates
+        :return: dictionary of results like {tag_identifier: numpy.array}
+        """
+        with self._get_fcntl_lock('r') as handle:
+            try:
+                # read in the data
+                self._read_file_info(handle)
+                self._read_tag_data(handle)
+            finally:
+                # release shared lock
+                flock(handle, LOCK_UN)
+        return
+
+    def write(self):
+        """
+        writes the file out to file_name.
+        requires an exclusive LOCK_EX fcntl lock.
+        blocks until it can get a lock
+        :return: void
+        """
+        # put a file in the same directory to block new shared requests
+        # this prevents a popular file from blocking forever
+        # note, this is a blocking function as it waits for other write events to finish
+        with self._get_fcntl_lock('w') as handle:
+            try:
+                self._write_file_info(handle)
+                self._write_tag_data(handle)
+            finally:
+                flock(handle, LOCK_UN)  # release lock
+                block_file_name = self._blocking_file_name()
+                if os.path.exists(block_file_name):
+                    os.remove(block_file_name)
+        return

@@ -1,4 +1,5 @@
 from .exceptions import IntegerNotUnsignedException, IntegerLargerThan64BitsException
+from .validation import ensure_int
 
 
 def determine_required_bytes(value: int) -> int:
@@ -7,6 +8,7 @@ def determine_required_bytes(value: int) -> int:
     :param value: an UNSIGNED integer
     :return: 1, 2, 4, or 8
     """
+    value = ensure_int(value)
     if value < 0:
         raise IntegerNotUnsignedException
     if (value >> 8) == 0:
