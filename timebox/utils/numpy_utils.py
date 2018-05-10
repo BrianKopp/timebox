@@ -1,6 +1,6 @@
 import numpy as np
 from .validation import ensure_int
-from .exceptions import CharConversionException
+from .exceptions import *
 
 
 def get_type_char_int(type_char_or_int):
@@ -93,3 +93,87 @@ def get_numpy_type(type_char, size: int) -> np.dtype:
             size
         )
     )
+
+
+def compress_float_array(arr: np.array) -> np.array:
+    """
+    Takes a numpy array with dtype.kind = 'f',
+    and checks to see which bits are used in the float,
+    then returns the compressed array as a float16, float32, or float64
+    in a loss-less format
+    :param arr: numpy array of floats
+    :return: compressed array
+    """
+    if arr.dtype.kind != 'f':
+        raise ArrayNotFloatException
+    # filter out NaN values
+    not_nan = arr[~np.isnan(arr)]
+    if not_nan.size == 0:
+        return arr.astype(np.float16)
+
+    # put the array into a byte array
+    bytes_dtype = np.dtype([('byte_{}'.format(i), np.uint8) for i in range(0, arr.itemsize)])
+    byte_array = np.frombuffer(not_nan.tobytes(), dtype=bytes_dtype)
+    byte_arr_len = byte_array['byte_0'].shape[0]
+    # mantissa is X bits long, with left-right having value of
+    # 0.5 * 2^(i)
+    big_endian_nth_byte = dict(
+        [('byte_{}'.format(i), 'byte_{}'.format(arr.itemsize - i - 1)) for i in range(0, arr.itemsize)]
+    )
+    if arr.itemsize == 8:
+        # numpy 64-bit float has 52 bits of mantissa
+        # in order to compress to 32-bit float, we need to pack mantissa into
+        # 23 bits. This means we need 52-23=29 bits of zeros on the end.
+        # that means that the 3 right-most bytes must be zero
+        # and that the 4th right-most byte must have 5 right-most bits = 0
+        # we'll check this by seeing if '0001 1111' & byte == 0. (0001 1111 is 31)
+        # finally, we'll need to check the exponent compression
+
+        # first check the 4th right-most byte. it's most likely to have the
+        # significant bits we can't drop
+        bitwise_reduction = np.bitwise_and(
+            byte_array[big_endian_nth_byte['byte_4']],
+            np.full(byte_arr_len, 31, dtype=np.uint8)
+        )
+        if np.count_nonzero(bitwise_reduction) > 0:
+            return arr
+        # next check the remaining bits
+        if np.count_nonzero(byte_array[big_endian_nth_byte['byte_5']]) > 0 \
+            or np.count_nonzero(byte_array[big_endian_nth_byte['byte_6']]) > 0 \
+                or np.count_nonzero(byte_array[big_endian_nth_byte['byte_7']]) > 0:
+            return arr
+        # finally check the exponent. in 64-bit float, exponent can be +/- 1024.
+        # in 32-bit float, exponent can be +/-128
+        # do this the easy way and get this from numpy
+        bitwise_exponent = np.frexp(not_nan)[1]
+        if np.amax(bitwise_exponent) > 128 or np.amin(bitwise_exponent) < -128:
+            return arr
+
+        # else, we're good to go onto 32-bit reduction
+        return compress_float_array(arr.astype(np.float32))
+
+    if arr.itemsize == 4:
+        # numpy 32-bit float has 23 bits of mantissa.
+        # numpy 16-bit float has 10 bits mantissa.
+        # we require the right-most 13-bits to be zero. byte_3 (4th byte)
+        # must be all zero, and byte_2 (3rd byte) must have
+        # the 5 right-most bits be zero. We will bitwise-and against 31
+        # (0001 1111) to see if it complies
+        bitwise_reduction = np.bitwise_and(
+            byte_array[big_endian_nth_byte['byte_2']],
+            np.full(byte_arr_len, 31, dtype=np.uint8)
+        )
+        if np.count_nonzero(bitwise_reduction) > 0:
+            return arr
+        # next check the 4th byte for zeros
+        if np.count_nonzero(byte_array[big_endian_nth_byte['byte_3']]) > 0:
+            return arr
+        # finally, check exponent. In 32-bit float, exponent can be +/- 128
+        # in 16-bit float, exponent can be +/-16
+        bitwise_exponent = np.frexp(not_nan)[1]
+        if np.amax(bitwise_exponent) > 16 or np.amin(bitwise_exponent) < -16:
+            return arr
+        # else, return compressed
+        return arr.astype(np.float16)
+
+    return arr

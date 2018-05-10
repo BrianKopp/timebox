@@ -2,10 +2,10 @@ import numpy as np
 import os
 import time
 from fcntl import flock, LOCK_EX, LOCK_SH, LOCK_UN, LOCK_NB
-from .utils.numpy_utils import get_numpy_type, get_type_char_int
+from .utils.numpy_utils import get_numpy_type, get_type_char_int, compress_float_array
 from .utils.validation import ensure_int
 from .utils.exceptions import NotIntegerException
-from .utils.binary import determine_required_bytes
+from .utils.binary import determine_required_bytes_unsigned_integer
 from .constants import *
 from .tag_info import TagInfo
 from .exceptions import *
@@ -27,6 +27,8 @@ class TimeBox:
     _bytes_per_date_differential = 0
     _date_differential_units = 0
     _data = {}  # like { tag_identifier: numpy array }
+    _date_differentials = None  # numpy array
+    _dates = None  # numpy array of datetime64[s]
     _MAX_WRITE_BLOCK_WAIT_SECONDS = MAX_WRITE_BLOCK_WAIT_SECONDS
     _MAX_READ_BLOCK_WAIT_SECONDS = MAX_READ_BLOCK_WAIT_SECONDS
 
@@ -63,6 +65,58 @@ class TimeBox:
         else:
             id_type = np.dtype([('tag_identifier', get_numpy_type('u', num_bytes_for_tag_identifier * 8))])
         return np.dtype([id_type.descr[0], ('bytes_per_point', np.uint8), ('type_char', np.uint8)])
+
+    @classmethod
+    def _compress_array(cls, arr: np.array, mode: str, date_units: str = None):
+        """
+        compresses the array by finding the minimum value.
+        if mode is 'e', the input array must have a >= derivative, and then differences between elements are stored
+        if mode is 'm', the returned array holds the difference from minimum
+        :param arr: numpy source array
+        :param mode: string, must be 'e' or 'm'. 'e' is differences between elements, 'm' is difference from minimum
+        :param date_units: string, must correspond to numpy date units
+        :return: tuple like numpy array, value. if mode='e', array has 1 fewer elements than arr
+        and value is the starting value. If mode='m', value is minimum
+        """
+        if mode not in ['e', 'm']:
+            raise CompressionModeInvalidError('Mode must be "e" or "m", {} found'.format(mode))
+
+        # if we're already tiny, no compression
+        if arr.dtype.kind in ['u', 'i'] and arr.itemsize == 1:
+            return arr
+        if arr.dtype.kind == 'f' and arr.itemsize == 2:
+            return arr
+
+        # can't do an 'e' mode if size is 1
+        if arr.size == 1 and mode == 'e':
+            return arr
+
+        # else, continue on
+        min_value = np.amin(arr)
+        diff_array = None
+        if mode == 'e':
+            diff_array = np.ediff1d(arr)
+            # ensure ret_array only has positive values
+            if np.amin(diff_array) < 0:
+                raise CompressionError('Unable to compress using ''e'' difference between elements. '
+                                       'Negative derivative found.')
+        if mode == 'm':
+            diff_array = arr - min_value
+
+        # TODO handle date units
+
+        # calculate the size of data needed
+        max_value = np.amax(diff_array)
+        if diff_array.dtype.kind in ['u', 'i']:  # integer or unsigned integer
+            num_bytes = determine_required_bytes_unsigned_integer(max_value)
+            ret_array = diff_array.astype(get_numpy_type('u', num_bytes * 8))
+        elif diff_array.dtype.kind == 'f':  # float
+            # try to convert the array
+            ret_array = compress_float_array(diff_array)
+        else:
+            raise CompressionError('Could not compress. dtype kind {} not '
+                                   'eligible for compression.'.format(diff_array.dtype.kind))
+        return (ret_array, min_value) if mode == 'm' else (ret_array, arr[0])
 
     def _unpack_tag_definitions(self, from_bytes: str):
         """
@@ -150,7 +204,7 @@ class TimeBox:
             max_length = max([len(k) for k in self._tag_definitions])
             self._num_bytes_for_tag_identifier = max_length * 4
         else:
-            self._num_bytes_for_tag_identifier = determine_required_bytes(max([k for k in self._tag_definitions]))
+            self._num_bytes_for_tag_identifier = determine_required_bytes_unsigned_integer(max([k for k in self._tag_definitions]))
         return
 
     def _tag_definitions_to_bytes(self) -> (int, bytes):
@@ -215,12 +269,20 @@ class TimeBox:
         for t in self._tag_definitions:
             if self._data[t].dtype != self._tag_definitions[t].dtype:
                 raise DataDoesNotMatchTagDefinitionError('Data for tag {} does not have correct '
-                                                    'dtype {}'.format(t, self._tag_definitions[t].dtype))
+                                                         'dtype {}'.format(t, self._tag_definitions[t].dtype))
+            if self._data[t].shape[0] != self._num_points:
+                raise DataShapeError('Data for tag {} does not have the correct shape'.format(t))
+
+        if self._date_differentials_stored:
+            if self._date_differentials.dtype != get_numpy_type('u', self._bytes_per_date_differential):
+                raise DateDataError('Date differential dtype does not match bytes per date differential.')
+            if self._date_differentials.shape != self._num_points:
+                raise DataShapeError('Date differential array does not have the correct shape')
         return
 
     def _write_tag_data(self, file_handle) -> int:
         """
-        writes out the tag data, first writing the booleans then writing the actual data
+        writes out the tag data, first writing the booleans (TODO) then writing the actual data
         :param file_handle: file handle object in 'wb' mode, pre-seeked to correct position
         :return: int, seek bytes advanced in this method
         """
@@ -249,6 +311,40 @@ class TimeBox:
                 count=self._num_points
             )
         return seek_bytes
+
+    def _write_date_deltas(self, file_handle) -> int:
+        """
+        writes out the date differentials
+        :param file_handle: file handle object in 'wb' mode, pre-seeked to the correct position
+        :return: int, seek bytes advanced in this method
+        """
+        self._date_differentials.tofile(file_handle)
+        return self._num_points * self._bytes_per_date_differential
+
+    def _read_date_deltas(self, file_handle) -> int:
+        """
+        reads the date differentials
+        :param file_handle: file handle object in 'rb' mode, pre-seeked to the correct position
+        :return: int, seek bytes advanced in this method
+        """
+        self._date_differentials = np.fromfile(
+            file_handle,
+            dtype=get_numpy_type('u', self._bytes_per_date_differential)
+        )
+        return self._num_points * self._bytes_per_date_differential
+
+    def _calculate_date_differentials(self):
+        """
+        Calculates the date differentials array from the _dates array
+        :return: void
+        """
+        # ensure that the dates are sorted
+        differences = np.ediff1d(self._dates)
+        min_diff = differences.amin()
+        self._start_date = self._dates.min()
+
+
+        return
 
     def _blocking_file_name(self) -> str:
         """

@@ -12,3 +12,7 @@ class IntegerNotUnsignedException(ValueError):
 
 class IntegerLargerThan64BitsException(ValueError):
     pass
+
+
+class ArrayNotFloatException(TypeError):
+    pass

@@ -2,7 +2,7 @@ from .exceptions import IntegerNotUnsignedException, IntegerLargerThan64BitsExce
 from .validation import ensure_int
 
 
-def determine_required_bytes(value: int) -> int:
+def determine_required_bytes_unsigned_integer(value: int) -> int:
     """
     Determines the number of bytes that are required to store value
     :param value: an UNSIGNED integer
