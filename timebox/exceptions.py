@@ -18,9 +18,3 @@ class DateDataError(ValueError):
     pass
 
 
-class CompressionModeInvalidError(ValueError):
-    pass
-
-
-class CompressionError(ValueError):
-    pass

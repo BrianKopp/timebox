@@ -16,3 +16,19 @@ class IntegerLargerThan64BitsException(ValueError):
 
 class ArrayNotFloatException(TypeError):
     pass
+
+
+class DateUnitsError(TypeError):
+    pass
+
+
+class DateUnitsGranularityError(TypeError):
+    pass
+
+
+class CompressionModeInvalidError(ValueError):
+    pass
+
+
+class CompressionError(ValueError):
+    pass

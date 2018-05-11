@@ -1,4 +1,5 @@
 import numpy as np
+from .binary import determine_required_bytes_unsigned_integer
 from .validation import ensure_int
 from .exceptions import *
 
@@ -177,3 +178,54 @@ def compress_float_array(arr: np.array) -> np.array:
         return arr.astype(np.float16)
 
     return arr
+
+
+def compress_array(arr: np.array, mode: str):
+    """
+    compresses the array by finding the minimum value.
+    if mode is 'e', the input array must have a >= derivative, and then differences between elements are stored
+    if mode is 'm', the returned array holds the difference from minimum
+    :param arr: numpy source array
+    :param mode: string, must be 'e' or 'm'. 'e' is differences between elements, 'm' is difference from minimum
+    :return: tuple like numpy array, value. if mode='e', array has 1 fewer elements than arr
+    and value is the starting value. If mode='m', value is minimum
+    """
+    if mode not in ['e', 'm']:
+        raise CompressionModeInvalidError('Mode must be "e" or "m", {} found'.format(mode))
+
+    if arr.dtype.kind not in ['f', 'u', 'i']:
+        raise CompressionError('Could not compress. dtype kind {} not '
+                               'eligible for compression.'.format(arr.dtype.kind))
+
+    # if we're already tiny, no compression
+    if arr.dtype.kind in ['u', 'i'] and arr.itemsize == 1:
+        return arr
+    if arr.dtype.kind == 'f' and arr.itemsize == 2:
+        return arr
+
+    # can't do an 'e' mode if size is 1
+    if arr.size == 1 and mode == 'e':
+        return arr
+
+    # else, continue on
+    min_value = np.amin(arr)
+    diff_array = None
+    if mode == 'e':
+        diff_array = np.ediff1d(arr)
+        # ensure ret_array only has positive values
+        if np.amin(diff_array) < 0:
+            raise CompressionError('Unable to compress using ''e'' difference between elements. '
+                                   'Negative derivative found.')
+    if mode == 'm':
+        diff_array = arr - min_value
+
+    # calculate the size of data needed
+    max_value = np.amax(diff_array)
+    ret_array = None
+    if diff_array.dtype.kind in ['u', 'i']:  # integer or unsigned integer
+        num_bytes = determine_required_bytes_unsigned_integer(max_value)
+        ret_array = diff_array.astype(get_numpy_type('u', num_bytes * 8))
+    if diff_array.dtype.kind == 'f':  # float
+        # try to convert the array
+        ret_array = compress_float_array(diff_array)
+    return (ret_array, min_value) if mode == 'm' else (ret_array, arr[0])

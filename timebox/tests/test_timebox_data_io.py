@@ -1,4 +1,4 @@
-from ..exceptions import DataDoesNotMatchTagDefinitionError
+from ..exceptions import *
 from ..timebox import TimeBox
 from ..tag_info import TagInfo
 import unittest
@@ -60,6 +60,11 @@ class TestTimeBoxTagReadWrite(unittest.TestCase):
         tb = example_time_box('')
         tb._tag_definitions[0].dtype = None
         with self.assertRaises(DataDoesNotMatchTagDefinitionError):
+            tb._validate_data_for_write()
+
+        tb._tag_definitions[0].dtype = np.uint8
+        tb._data[0] = np.array([1], dtype=np.uint8)
+        with self.assertRaises(DataShapeError):
             tb._validate_data_for_write()
 
         return

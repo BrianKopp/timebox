@@ -1,5 +1,6 @@
 from ..timebox import TimeBox
 from ..tag_info import TagInfo
+from ..utils.datetime_utils import SECONDS
 import unittest
 import numpy as np
 import os
@@ -164,15 +165,15 @@ class TestTimeBoxFileInfo(unittest.TestCase):
         tb._tag_definitions = example_tag_definitions()
         tb._start_date = np.datetime64('2018-01-01', 's')
         tb._bytes_per_date_differential = 4
-        tb._date_differential_units = 's'
+        tb._date_differential_units = SECONDS
 
         file_name = 'test_delta.npb'
         with open(file_name, 'wb') as f:
-            self.assertEqual(39, tb._write_file_info(f))
+            self.assertEqual(40, tb._write_file_info(f))
 
         tb_read = TimeBox('')
         with open(file_name, 'rb') as f:
-            self.assertEqual(39, tb_read._read_file_info(f))
+            self.assertEqual(40, tb_read._read_file_info(f))
 
         self.assertEqual(tb._timebox_version, tb_read._timebox_version)
         self.assertEqual(tb._tag_names_are_strings, tb_read._tag_names_are_strings)
