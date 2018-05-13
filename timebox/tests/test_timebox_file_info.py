@@ -19,7 +19,7 @@ def example_tag_definitions():
 class TestTimeBoxFileInfo(unittest.TestCase):
     def test_init(self):
         tb = TimeBox('test_file_path.txt')
-        self.assertEqual('test_file_path.txt', tb._file_path)
+        self.assertEqual('test_file_path.txt', tb.file_path)
         return
 
     def test_update_required_bytes(self):

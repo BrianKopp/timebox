@@ -32,3 +32,11 @@ class CompressionModeInvalidError(ValueError):
 
 class CompressionError(ValueError):
     pass
+
+
+class InvalidPandasIndexError(ValueError):
+    pass
+
+
+class InvalidPandasDataTypeError(TypeError):
+    pass

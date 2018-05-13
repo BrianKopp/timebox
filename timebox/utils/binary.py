@@ -20,3 +20,12 @@ def determine_required_bytes_unsigned_integer(value: int) -> int:
     if (value >> 64) == 0:
         return 8
     raise IntegerLargerThan64BitsException
+
+
+def read_unsigned_int(from_bytes: bytes) -> int:
+    """
+    from_bytes is the binary file contents to read from
+    :param from_bytes: string representation of binary bytes read from a file
+    :return: integer
+    """
+    return int.from_bytes(from_bytes, byteorder='little', signed=False)

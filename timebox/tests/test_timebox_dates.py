@@ -1,6 +1,7 @@
 from ..exceptions import *
 from ..timebox import TimeBox
 from ..tag_info import TagInfo
+from ..utils.datetime_utils import DAYS, HOURS
 import unittest
 import numpy as np
 import os
@@ -24,6 +25,7 @@ def example_time_box(file_name: str):
         2: np.array([5.2, 0.8, 3.1415, 8], dtype=np.float32)
     }
     tb._date_differentials = np.array([1, 1, 1], dtype=np.uint8)
+    tb._date_differential_units = DAYS
     tb._bytes_per_date_differential = 1
     return tb
 
@@ -50,6 +52,20 @@ class TestTimeBoxDateData(unittest.TestCase):
         tb._date_differentials = np.array([1, 1, 1, 1], dtype=np.uint8)
         with self.assertRaises(DateDataError):
             tb._validate_data_for_write()
+
+        tb = example_time_box('')
+        tb._date_differentials = None
+        tb._dates = np.array(
+            [
+                np.datetime64('2018-01-05', 's'),
+                np.datetime64('2018-01-04', 's'),
+                np.datetime64('2018-01-03', 's'),
+                np.datetime64('2018-01-02', 's')
+            ],
+            dtype=np.datetime64
+        )
+        with self.assertRaises(DateDataError):
+            tb._calculate_date_differentials()
         return
 
     def test_date_differential_io(self):
@@ -63,6 +79,84 @@ class TestTimeBoxDateData(unittest.TestCase):
 
         self.assertEqual(np.uint8, tb._date_differentials.dtype)
         self.assertEqual(3, tb._date_differentials.size)
+        os.remove(file_name)
+        return
+
+    def test_calculate_date_differentials(self):
+        tb = example_time_box('')
+        tb._date_differentials = None
+        tb._dates = np.array(
+            [
+                np.datetime64('2018-01-01', 's'),
+                np.datetime64('2018-01-02', 's'),
+                np.datetime64('2018-01-03', 's'),
+                np.datetime64('2018-01-05', 's')
+            ]
+        )
+        tb._calculate_date_differentials()
+        self.assertEqual(3, tb._date_differentials.size)
+        self.assertEqual('timedelta64[s]', str(tb._date_differentials.dtype))
+        self.assertEqual(86400, tb._date_differentials[0].astype(np.int64))
+        self.assertEqual(86400, tb._date_differentials[1].astype(np.int64))
+        self.assertEqual(2*86400, tb._date_differentials[2].astype(np.int64))
+        return
+
+    def test_compress_date_differentials(self):
+        tb = example_time_box('')
+        tb._date_differentials = None
+        tb._dates = np.array(
+            [
+                np.datetime64('2018-01-01', 's'),
+                np.datetime64('2018-01-02', 's'),
+                np.datetime64('2018-01-03', 's'),
+                np.datetime64('2018-01-05', 's')
+            ]
+        )
+        tb._calculate_date_differentials()
+        tb._compress_date_differentials()
+        self.assertEqual(3, tb._date_differentials.size)
+        self.assertEqual(np.uint8, tb._date_differentials.dtype)
+        self.assertEqual(DAYS, tb._date_differential_units)
+        self.assertEqual(1, tb._bytes_per_date_differential)
+        self.assertEqual(1, tb._date_differentials[0])
+        self.assertEqual(1, tb._date_differentials[1])
+        self.assertEqual(2, tb._date_differentials[2])
+        return
+
+    def test_time_box_date_io(self):
+        file_name = 'date_io.npb'
+        tb = example_time_box(file_name)
+        tb._date_differentials = None
+        tb._dates = np.array(
+            [
+                np.datetime64('2018-01-01T00:00', 's'),
+                np.datetime64('2018-01-02T12:00', 's'),
+                np.datetime64('2018-01-03T05:00', 's'),
+                np.datetime64('2018-01-05T00:00', 's')
+            ]
+        )
+        tb.write()
+        self.assertEqual(3, tb._date_differentials.size)
+        self.assertEqual(np.uint8, tb._date_differentials.dtype)
+        self.assertEqual(HOURS, tb._date_differential_units)
+        self.assertEqual(24+12, tb._date_differentials[0])
+        self.assertEqual(12+5, tb._date_differentials[1])
+        self.assertEqual(19+24, tb._date_differentials[2])
+
+        tb_new = TimeBox(file_name)
+        tb_new.read()
+        self.assertEqual(1, tb_new._timebox_version)
+        self.assertFalse(tb_new._tag_names_are_strings)
+        self.assertTrue(tb_new._date_differentials_stored)
+        self.assertEqual(1, tb_new._bytes_per_date_differential)
+        self.assertEqual(HOURS, tb_new._date_differential_units)
+        self.assertEqual(np.uint8, tb_new._date_differentials.dtype)
+
+        self.assertEqual(3, tb_new._date_differentials.size)
+        self.assertEqual(24+12, tb_new._date_differentials[0])
+        self.assertEqual(12+5, tb_new._date_differentials[1])
+        self.assertEqual(19+24, tb_new._date_differentials[2])
+
         os.remove(file_name)
         return
 

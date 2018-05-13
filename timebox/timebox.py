@@ -1,4 +1,5 @@
 import numpy as np
+import pandas as pd
 import os
 import time
 from fcntl import flock, LOCK_EX, LOCK_SH, LOCK_UN, LOCK_NB
@@ -6,7 +7,8 @@ from .utils.datetime_utils import compress_time_delta_array, get_unit_data
 from .utils.numpy_utils import *
 from .utils.validation import ensure_int
 from .utils.exceptions import NotIntegerException
-from .utils.binary import determine_required_bytes_unsigned_integer
+from .utils.binary import determine_required_bytes_unsigned_integer, read_unsigned_int
+from .utils.pandas_utils import parse_pandas_dtype
 from .constants import *
 from .tag_info import TagInfo
 from .exceptions import *
@@ -17,34 +19,57 @@ MAX_READ_BLOCK_WAIT_SECONDS = 30
 
 
 class TimeBox:
-    _file_path = None
-    _timebox_version = 0
-    _tag_names_are_strings = False
-    _date_differentials_stored = True
-    _num_points = 0
-    _tag_definitions = {}  # like { int|string tag_identifier }
-    _start_date = None
-    _seconds_between_points = 0
-    _bytes_per_date_differential = 0
-    _date_differential_units = 0
-    _data = {}  # like { tag_identifier: numpy array }
-    _date_differentials = None  # numpy array
-    _dates = None  # numpy array of datetime64[s]
-    _MAX_WRITE_BLOCK_WAIT_SECONDS = MAX_WRITE_BLOCK_WAIT_SECONDS
-    _MAX_READ_BLOCK_WAIT_SECONDS = MAX_READ_BLOCK_WAIT_SECONDS
-
     def __init__(self, file_path: str):
-        self._file_path = file_path
+        self.file_path = file_path
+        self._timebox_version = 1
+        self._tag_names_are_strings = False
+        self._date_differentials_stored = True
+        self._num_points = 0
+        self._tag_definitions = {}  # like { int|string tag_identifier }
+        self._start_date = None
+        self._seconds_between_points = 0
+        self._bytes_per_date_differential = 0
+        self._date_differential_units = 0
+        self._data = {}  # like { tag_identifier: numpy array }
+        self._date_differentials = None  # numpy array
+        self._dates = None  # numpy array of datetime64[s]
+        self._MAX_WRITE_BLOCK_WAIT_SECONDS = MAX_WRITE_BLOCK_WAIT_SECONDS
+        self._MAX_READ_BLOCK_WAIT_SECONDS = MAX_READ_BLOCK_WAIT_SECONDS
         return
 
     @classmethod
-    def _read_unsigned_int(cls, from_bytes: bytes) -> int:
+    def save_pandas(cls, df: pd.DataFrame, file_path: str):
         """
-        from_bytes is the binary file contents to read from
-        :param from_bytes: string representation of 1 binary byte read from a file
-        :return: integer
+        Expects that the passing df has an index that is type Timestamp
+        or string which can be converted to Timestamp. All dtypes in pandas
+        data frame must be in the float/int/u-int family
+        :param df: pandas DataFrame
+        :param file_path: file path to save pandas DataFrame
+        :return: TimeBox object
         """
-        return int.from_bytes(from_bytes, byteorder='little', signed=False)
+        # make sure the pandas data frame is sorted on date
+        df = df.sort_index()
+
+        tb = TimeBox(file_path)
+        tb._tag_names_are_strings = True
+
+        # ensure index is there and can be converted to numpy array of datetime64s
+        tb._dates = df.index.values.astype(np.datetime64)
+        tb._start_date = np.amin(tb._dates.astype(np.dtype('datetime64[s]')))
+        tb._date_differentials_stored = True
+        tb._num_points = tb._dates.size
+
+        # get column names and info
+        for c in df.columns:
+            type_info = parse_pandas_dtype(df[c].dtype)
+            tb._tag_definitions[c] = TagInfo(c, type_info[0], type_info[1])
+            tb._data[c] = df[c].values
+
+        try:
+            tb.write()
+        except DateUnitsError:
+            raise InvalidPandasIndexError('There was an error reading the date-time index on data frame')
+        return tb
 
     @classmethod
     def _get_tag_info_dtype(cls, num_bytes_for_tag_identifier: int, tag_identifier_is_string: bool) -> np.dtype:
@@ -66,6 +91,19 @@ class TimeBox:
         else:
             id_type = np.dtype([('tag_identifier', get_numpy_type('u', num_bytes_for_tag_identifier * 8))])
         return np.dtype([id_type.descr[0], ('bytes_per_point', np.uint8), ('type_char', np.uint8)])
+
+    def to_pandas(self) -> pd.DataFrame:
+        """
+        Populates a pandas data frame and returns it.
+        :return: Pandas DataFrame
+        """
+        # check if haven't read
+        if len(self._data) == 0:
+            self.read()
+        data = [(t, self._data[t]) for t in self._data]
+        data.append(('DateTimes', self._dates))
+        df = pd.DataFrame.from_items(data)
+        return df.set_index('DateTimes')
 
     def _unpack_tag_definitions(self, from_bytes: str):
         """
@@ -149,11 +187,11 @@ class TimeBox:
         :param file_handle: file handle object in 'rb' mode that is seeked to the correct position (0)
         :return: int, seek bytes increased since file_handle was received
         """
-        self._timebox_version = TimeBox._read_unsigned_int(file_handle.read(1))
-        self._unpack_options(int(TimeBox._read_unsigned_int(file_handle.read(2))))
-        num_tags = TimeBox._read_unsigned_int(file_handle.read(1))
-        self._num_points = TimeBox._read_unsigned_int(file_handle.read(4))
-        self._num_bytes_for_tag_identifier = TimeBox._read_unsigned_int(file_handle.read(1))
+        self._timebox_version = read_unsigned_int(file_handle.read(1))
+        self._unpack_options(int(read_unsigned_int(file_handle.read(2))))
+        num_tags = read_unsigned_int(file_handle.read(1))
+        self._num_points = read_unsigned_int(file_handle.read(4))
+        self._num_bytes_for_tag_identifier = read_unsigned_int(file_handle.read(1))
         bytes_seek = 1 + 2 + 1 + 4 + 1
 
         # first 2 bytes are info on the tag
@@ -166,14 +204,14 @@ class TimeBox:
 
         if self._date_differentials_stored:
             self._seconds_between_points = 0
-            self._bytes_per_date_differential = TimeBox._read_unsigned_int(file_handle.read(1))
-            stored_value_for_date_diff_units = TimeBox._read_unsigned_int(file_handle.read(2))
+            self._bytes_per_date_differential = read_unsigned_int(file_handle.read(1))
+            stored_value_for_date_diff_units = read_unsigned_int(file_handle.read(2))
             self._date_differential_units = get_date_utils_constant_from_stored_units_int(
                 stored_value_for_date_diff_units
             )
             bytes_seek += 3
         else:
-            self._seconds_between_points = TimeBox._read_unsigned_int(file_handle.read(4))
+            self._seconds_between_points = read_unsigned_int(file_handle.read(4))
             self._bytes_per_date_differential = 0
             self._date_differential_units = 0
             bytes_seek += 4
@@ -289,8 +327,16 @@ class TimeBox:
         """
         self._date_differentials = np.fromfile(
             file_handle,
-            dtype=get_numpy_type('u', 8 * self._bytes_per_date_differential)
+            dtype=get_numpy_type('u', 8 * self._bytes_per_date_differential),
+            count=self._num_points-1
         )
+
+        # populate dates array
+        unit_data = get_unit_data(self._date_differential_units)
+        data_type = np.dtype('timedelta64[{}]'.format(unit_data.units))
+        cumulative_time_deltas = np.cumsum(self._date_differentials.astype(data_type))
+        dates = cumulative_time_deltas + self._start_date
+        self._dates = np.insert(dates, 0, self._start_date)
         return self._date_differentials.nbytes
 
     def _calculate_date_differentials(self):
@@ -299,11 +345,11 @@ class TimeBox:
         :return: void
         """
         self._start_date = np.amin(self._dates)
-        differences = np.ediff1d(self._dates)  # returns timedelta64[s]
+        differences = np.ediff1d(self._dates)
         # ensure that the dates are sorted
-        if np.amin(differences) < 0:
+        if np.amin(differences).astype(np.int64) < 0:
             raise DateDataError('Dates were not in order')
-        self._date_differentials = differences.astype(np.uint64)
+        self._date_differentials = differences
         return
 
     def _compress_date_differentials(self):
@@ -313,9 +359,12 @@ class TimeBox:
         :return: void
         """
         result = compress_time_delta_array(self._date_differentials)
-        self._date_differentials = compress_array(result[0], 'e')
         unit_data = get_unit_data(result[1])
         self._date_differential_units = unit_data.order
+        max_diff = np.amax(result[0])
+        bytes_needed = determine_required_bytes_unsigned_integer(max_diff)
+        self._date_differentials = result[0].astype(get_numpy_type('u', 8 * bytes_needed))
+        self._bytes_per_date_differential = bytes_needed
         return
 
     def _blocking_file_name(self) -> str:
@@ -323,7 +372,7 @@ class TimeBox:
         returns a file blocking name
         :return: file name of blocking file
         """
-        return '{}.lock'.format(self._file_path)
+        return '{}.lock'.format(self.file_path)
 
     def _get_fcntl_lock(self, mode: str = 'r'):
         """
@@ -339,7 +388,7 @@ class TimeBox:
         count = 0
         sleep_seconds = 0.1
         file_locked = False
-        handle = open(self._file_path, 'rb' if mode is 'r' else 'wb')
+        handle = open(self.file_path, 'rb' if mode is 'r' else 'wb')
         if mode == 'r':
             # check and see if a blocking file exists, meaning we're waiting for a write job to clear
             # then try to get the lock
@@ -384,6 +433,10 @@ class TimeBox:
             try:
                 # read in the data
                 self._read_file_info(handle)
+
+                if self._date_differentials_stored:
+                    self._read_date_deltas(handle)
+
                 self._read_tag_data(handle)
             finally:
                 # release shared lock
@@ -406,7 +459,12 @@ class TimeBox:
                 if self._date_differentials_stored:
                     self._calculate_date_differentials()
                     self._compress_date_differentials()
+
                 self._write_file_info(handle)
+
+                if self._date_differentials_stored:
+                    self._write_date_deltas(handle)
+
                 self._write_tag_data(handle)
             finally:
                 flock(handle, LOCK_UN)  # release lock

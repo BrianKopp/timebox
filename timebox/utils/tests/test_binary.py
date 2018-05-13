@@ -1,4 +1,4 @@
-from ..binary import determine_required_bytes_unsigned_integer
+from ..binary import determine_required_bytes_unsigned_integer, read_unsigned_int
 from ..exceptions import (
     IntegerLargerThan64BitsException,
     IntegerNotUnsignedException,
@@ -8,7 +8,7 @@ import unittest
 
 
 class TestBinaryUtils(unittest.TestCase):
-    def test_read_unsigned_int(self):
+    def test_determine_byte_requirements(self):
         with self.assertRaises(IntegerNotUnsignedException):
             determine_required_bytes_unsigned_integer(-1)
         with self.assertRaises(NotIntegerException):
@@ -30,6 +30,17 @@ class TestBinaryUtils(unittest.TestCase):
         with self.assertRaises(IntegerLargerThan64BitsException):
             determine_required_bytes_unsigned_integer(18446744073709551616)
         return
+
+    def test_read_unsigned_int(self):
+        self.assertEqual(0, read_unsigned_int(b'\x00'))
+        self.assertEqual(0, read_unsigned_int(b'\x00\x00'))
+        self.assertEqual(0, read_unsigned_int(b'\x00\x00\x00'))
+        self.assertEqual(0, read_unsigned_int(b'\x00\x00\x00\x00'))
+        self.assertEqual(1, read_unsigned_int(b'\x01\x00'))
+        self.assertEqual(255, read_unsigned_int(bytes([255])))
+        self.assertEqual(256, read_unsigned_int(b'\x00\x01'))
+        return
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -4,16 +4,6 @@ import unittest
 
 
 class TestTimeBoxStatics(unittest.TestCase):
-    def test_read_unsigned_int(self):
-        self.assertEqual(0, TimeBox._read_unsigned_int(b'\x00'))
-        self.assertEqual(0, TimeBox._read_unsigned_int(b'\x00\x00'))
-        self.assertEqual(0, TimeBox._read_unsigned_int(b'\x00\x00\x00'))
-        self.assertEqual(0, TimeBox._read_unsigned_int(b'\x00\x00\x00\x00'))
-        self.assertEqual(1, TimeBox._read_unsigned_int(b'\x01\x00'))
-        self.assertEqual(255, TimeBox._read_unsigned_int(bytes([255])))
-        self.assertEqual(256, TimeBox._read_unsigned_int(b'\x00\x01'))
-        return
-
     def test_get_tag_info_dtype(self):
         actual = TimeBox._get_tag_info_dtype(4, True)
         self.assertEqual('tag_identifier', actual.descr[0][0])
