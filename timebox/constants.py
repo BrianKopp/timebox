@@ -9,6 +9,7 @@ class TimeBoxOptionPositions(Enum):
 class TimeBoxTagOptionPositions(Enum):
     USE_COMPRESSION = 0
     USE_HASH_TABLE = 1
+    FLOATING_POINT_ROUNDED = 2
 
 
 def get_date_utils_constant_from_stored_units_int(value: int) -> int:

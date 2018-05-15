@@ -19,8 +19,10 @@ class TestTimeBoxTag(unittest.TestCase):
         self.assertEqual(None, tag_info.compressed_type_char)
         self.assertEqual(None, tag_info.compressed_bytes_per_value)
         self.assertEqual(None, tag_info.compression_mode)
+        self.assertEqual(None, tag_info.num_decimals_to_store)
         self.assertFalse(tag_info.use_compression)
         self.assertFalse(tag_info.use_hash_table)
+        self.assertFalse(tag_info.floating_point_rounded)
         self.assertEqual(0, tag_info.num_bytes_extra_information)
 
         tag_info = TimeBoxTag('my_id', 4, 'f', options=1)
@@ -109,6 +111,21 @@ class TestTimeBoxTag(unittest.TestCase):
         self.assertEqual('u', t.compressed_type_char)
         return
 
+    def test_encode_decode_def_bytes_floating_point_rounding(self):
+        t = TimeBoxTag(0, 8, 'f', options=0)
+        encoded_bytes = t._encode_def_bytes()
+        self.assertEqual(encoded_bytes, b''.join([b'\x00' for _ in range(0, 32)]))
+        t.floating_point_rounded = True
+        t.num_decimals_to_store = 2
+        encoded_bytes = t._encode_def_bytes()
+        self.assertEqual(2, encoded_bytes[0])
+
+        t = TimeBoxTag(0, 8, 'f', options=4)
+        t._decode_def_bytes(encoded_bytes)
+        self.assertTrue(t.floating_point_rounded)
+        self.assertEqual(2, t.num_decimals_to_store)
+        return
+
     def test_tag_to_bytes(self):
         t = TimeBoxTag(1, 8, 'u', options=0)
         t_byte_result = t.to_bytes(1, False)
@@ -124,37 +141,91 @@ class TestTimeBoxTag(unittest.TestCase):
 
     def test_tag_options(self):
         t = TimeBoxTag(1, 8, 'u', options=0)
+
+        t.use_compression = False
+        t.use_hash_table = False
+        t.floating_point_rounded = False
+        self.assertEqual(0, t._encode_options())
+
         t.use_compression = True
         t.use_hash_table = False
+        t.floating_point_rounded = False
         self.assertEqual(1, t._encode_options())
+
+        t.use_compression = False
+        t.use_hash_table = True
+        t.floating_point_rounded = False
+        self.assertEqual(2, t._encode_options())
 
         t.use_compression = True
         t.use_hash_table = True
+        t.floating_point_rounded = False
         self.assertEqual(3, t._encode_options())
 
         t.use_compression = False
-        t.use_hash_table = True
-        self.assertEqual(2, t._encode_options())
+        t.use_hash_table = False
+        t.floating_point_rounded = True
+        self.assertEqual(4, t._encode_options())
+
+        t.use_compression = True
+        t.use_hash_table = False
+        t.floating_point_rounded = True
+        self.assertEqual(5, t._encode_options())
 
         t.use_compression = False
-        t.use_hash_table = False
-        self.assertEqual(0, t._encode_options())
+        t.use_hash_table = True
+        t.floating_point_rounded = True
+        self.assertEqual(6, t._encode_options())
+
+        t.use_compression = True
+        t.use_hash_table = True
+        t.floating_point_rounded = True
+        self.assertEqual(7, t._encode_options())
+
+        t.use_compression = True
+        t.use_hash_table = True
+        t.floating_point_rounded = False
+        self.assertEqual(3, t._encode_options())
 
         t._decode_options(0)
         self.assertFalse(t.use_compression)
         self.assertFalse(t.use_hash_table)
+        self.assertFalse(t.floating_point_rounded)
 
         t._decode_options(1)
         self.assertTrue(t.use_compression)
         self.assertFalse(t.use_hash_table)
+        self.assertFalse(t.floating_point_rounded)
 
         t._decode_options(2)
         self.assertFalse(t.use_compression)
         self.assertTrue(t.use_hash_table)
+        self.assertFalse(t.floating_point_rounded)
 
         t._decode_options(3)
         self.assertTrue(t.use_compression)
         self.assertTrue(t.use_hash_table)
+        self.assertFalse(t.floating_point_rounded)
+
+        t._decode_options(4)
+        self.assertFalse(t.use_compression)
+        self.assertFalse(t.use_hash_table)
+        self.assertTrue(t.floating_point_rounded)
+
+        t._decode_options(5)
+        self.assertTrue(t.use_compression)
+        self.assertFalse(t.use_hash_table)
+        self.assertTrue(t.floating_point_rounded)
+
+        t._decode_options(6)
+        self.assertFalse(t.use_compression)
+        self.assertTrue(t.use_hash_table)
+        self.assertTrue(t.floating_point_rounded)
+
+        t._decode_options(7)
+        self.assertTrue(t.use_compression)
+        self.assertTrue(t.use_hash_table)
+        self.assertTrue(t.floating_point_rounded)
         return
 
 if __name__ == '__main__':

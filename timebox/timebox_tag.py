@@ -21,15 +21,25 @@ class TimeBoxTag:
             self.type_char,
             self.bytes_per_value * 8
         )
+        self.num_bytes_extra_information = 0
         self.data = None
+
+        # options
+        self.use_compression = False
+        self.use_hash_table = False
+        self.floating_point_rounded = False
+        if options is not None:
+            self._decode_options(options)
+
+        # options data from untyped bytes
+        # compression data
         self.compressed_type_char = None
         self.compressed_bytes_per_value = None
         self.compression_mode = None
-        self.use_compression = False
-        self.use_hash_table = False
-        self.num_bytes_extra_information = 0
-        if options is not None:
-            self._decode_options(options)
+
+        # rounding data
+        self.num_decimals_to_store = None
+
         if untyped_bytes is not None:
             self._decode_def_bytes(untyped_bytes)
         return
@@ -67,6 +77,8 @@ class TimeBoxTag:
         :return: integer, no more than 16 bits (unsigned)
         """
         options = 0
+        options |= 1 if self.floating_point_rounded else 0
+        options <<= 1
         options |= 1 if self.use_hash_table else 0
         options <<= 1
         options |= 1 if self.use_compression else 0
@@ -79,8 +91,12 @@ class TimeBoxTag:
         :return: void, populates class internals
         """
         # starting with the right-most bits and working left
-        self.use_compression = True if (from_int >> TimeBoxTagOptionPositions.USE_COMPRESSION.value) & 1 else False
-        self.use_hash_table = True if (from_int >> TimeBoxTagOptionPositions.USE_HASH_TABLE.value) & 1 else False
+        compression_result = (from_int >> TimeBoxTagOptionPositions.USE_COMPRESSION.value) & 1
+        self.use_compression = True if compression_result else False
+        hash_result = (from_int >> TimeBoxTagOptionPositions.USE_HASH_TABLE.value) & 1
+        self.use_hash_table = True if hash_result else False
+        rounding_result = (from_int >> TimeBoxTagOptionPositions.FLOATING_POINT_ROUNDED.value) & 1
+        self.floating_point_rounded = True if rounding_result else False
         return
 
     def _encode_def_bytes(self) -> bytes:
@@ -97,6 +113,9 @@ class TimeBoxTag:
             counter += 1
             ret_bytes[counter] = get_type_char_int(self.compressed_type_char).to_bytes(1, 'little')
             counter += 1
+        if self.floating_point_rounded:
+            ret_bytes[counter] = self.num_decimals_to_store.to_bytes(1, 'little')
+            counter += 1
         return b''.join(ret_bytes)
 
     def _decode_def_bytes(self, from_bytes: bytes):
@@ -112,6 +131,9 @@ class TimeBoxTag:
             self.compression_mode = get_type_char_char(compression_info[0])
             self.compressed_bytes_per_value = compression_info[1]
             self.compressed_type_char = get_type_char_char(compression_info[2])
+        if self.floating_point_rounded:
+            self.num_decimals_to_store = from_bytes[counter]
+            counter += 1
         return
 
     @classmethod
