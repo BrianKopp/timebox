@@ -1,5 +1,14 @@
-TAG_NAME_BIT_POSITION = 0
-DATE_DIFFERENTIALS_STORED_POSITION = 1
+from enum import Enum
+
+
+class TimeBoxOptionPositions(Enum):
+    TAG_NAME_BIT_POSITION = 0
+    DATE_DIFFERENTIALS_STORED_POSITION = 1
+
+
+class TimeBoxTagOptionPositions(Enum):
+    USE_COMPRESSION = 0
+    USE_HASH_TABLE = 1
 
 
 def get_date_utils_constant_from_stored_units_int(value: int) -> int:

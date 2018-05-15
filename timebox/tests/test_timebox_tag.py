@@ -11,18 +11,49 @@ class TestTimeBoxTag(unittest.TestCase):
         self.assertEqual(4, tag_info.bytes_per_value)
         self.assertEqual('f', tag_info.type_char)
         self.assertEqual(np.float32, tag_info.dtype)
+
         tag_info = TimeBoxTag('my_id', 4, ord('f'))
         self.assertEqual(np.float32, tag_info.dtype)
+
+        self.assertEqual(None, tag_info.data)
+        self.assertEqual(None, tag_info.compressed_type_char)
+        self.assertEqual(None, tag_info.compressed_bytes_per_value)
+        self.assertEqual(None, tag_info.compression_mode)
+        self.assertFalse(tag_info.use_compression)
+        self.assertFalse(tag_info.use_hash_table)
+        self.assertEqual(0, tag_info.num_bytes_extra_information)
+
+        tag_info = TimeBoxTag('my_id', 4, 'f', options=1)
+        self.assertTrue(tag_info.use_compression)
+        tag_info = TimeBoxTag('my_id', 4, 'f', options=3)
+        self.assertTrue(tag_info.use_hash_table)
+        tag_info = TimeBoxTag('my_id', 4, 'f', options=2)
+        self.assertTrue(tag_info.use_hash_table)
+        self.assertFalse(tag_info.use_compression)
+
+        tag_info = TimeBoxTag('my_id', 4, 'f', options=0, untyped_bytes=b''.join([b'\x00' for _ in range(0, 32)]))
         return
 
     def test_get_tag_info_dtype(self):
         actual = TimeBoxTag.tag_info_dtype(4, True)
         self.assertEqual('tag_identifier', actual.descr[0][0])
-        self.assertEqual('bytes_per_point', actual.descr[1][0])
-        self.assertEqual('type_char', actual.descr[2][0])
         self.assertEqual('<U1', actual.descr[0][1])
-        self.assertEqual('|u1', actual.descr[1][1])
+
+        self.assertEqual('options', actual.descr[1][0])
+        self.assertEqual('<u2', actual.descr[1][1])
+
+        self.assertEqual('bytes_per_point', actual.descr[2][0])
         self.assertEqual('|u1', actual.descr[2][1])
+
+        self.assertEqual('type_char', actual.descr[3][0])
+        self.assertEqual('|u1', actual.descr[3][1])
+
+        self.assertEqual('bytes_extra_information', actual.descr[4][0])
+        self.assertEqual('<u4', actual.descr[4][1])
+
+        for i in range(0, 32):
+            self.assertEqual('def_byte_{}'.format(i + 1), actual.descr[5 + i][0])
+            self.assertEqual('|u1', actual.descr[5 + i][1])
 
         actual = TimeBoxTag.tag_info_dtype(16, True)
         self.assertEqual('<U4', actual.descr[0][1])
@@ -54,6 +85,76 @@ class TestTimeBoxTag(unittest.TestCase):
             TimeBoxTag.tag_info_dtype(-1, True)
         with self.assertRaises(ValueError):
             TimeBoxTag.tag_info_dtype(0.5, False)
+        return
+
+    def test_encode_decode_def_bytes_compression(self):
+        t = TimeBoxTag(0, 8, 'u', options=0)
+        encoded_bytes = t._encode_def_bytes()
+        self.assertEqual(encoded_bytes, b''.join([b'\x00' for _ in range(0, 32)]))
+        t.use_compression = True
+        t.compression_mode = 'e'
+        t.compressed_bytes_per_value = 2
+        t.compressed_type_char = 'u'
+        encoded_bytes = t._encode_def_bytes()
+        self.assertEqual(101, encoded_bytes[0])
+        self.assertEqual(2, encoded_bytes[1])
+        self.assertEqual(117, encoded_bytes[2])
+        self.assertEqual(0, encoded_bytes[3])
+
+        t = TimeBoxTag(0, 8, 'u', options=1)
+        t._decode_def_bytes(encoded_bytes)
+        self.assertTrue(t.use_compression)
+        self.assertEqual('e', t.compression_mode)
+        self.assertEqual(2, t.compressed_bytes_per_value)
+        self.assertEqual('u', t.compressed_type_char)
+        return
+
+    def test_tag_to_bytes(self):
+        t = TimeBoxTag(1, 8, 'u', options=0)
+        t_byte_result = t.to_bytes(1, False)
+        self.assertEqual(41, t_byte_result[0])
+        t_bytes = t_byte_result.byte_code
+        self.assertEqual(1, t_bytes[0])  # identifier
+        self.assertEqual(0, t_bytes[1])  # options, byte 1
+        self.assertEqual(0, t_bytes[2])  # options, byte 2
+        self.assertEqual(8, t_bytes[3])  # bytes per value
+        self.assertEqual(117, t_bytes[4])  # type char
+        self.assertEqual(b'\x00\x00\x00\x00', t_bytes[5:9])  # num bytes extra info
+        return
+
+    def test_tag_options(self):
+        t = TimeBoxTag(1, 8, 'u', options=0)
+        t.use_compression = True
+        t.use_hash_table = False
+        self.assertEqual(1, t._encode_options())
+
+        t.use_compression = True
+        t.use_hash_table = True
+        self.assertEqual(3, t._encode_options())
+
+        t.use_compression = False
+        t.use_hash_table = True
+        self.assertEqual(2, t._encode_options())
+
+        t.use_compression = False
+        t.use_hash_table = False
+        self.assertEqual(0, t._encode_options())
+
+        t._decode_options(0)
+        self.assertFalse(t.use_compression)
+        self.assertFalse(t.use_hash_table)
+
+        t._decode_options(1)
+        self.assertTrue(t.use_compression)
+        self.assertFalse(t.use_hash_table)
+
+        t._decode_options(2)
+        self.assertFalse(t.use_compression)
+        self.assertTrue(t.use_hash_table)
+
+        t._decode_options(3)
+        self.assertTrue(t.use_compression)
+        self.assertTrue(t.use_hash_table)
         return
 
 if __name__ == '__main__':

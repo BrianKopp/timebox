@@ -8,7 +8,7 @@ from timebox.utils.numpy_utils import *
 from timebox.utils.binary import determine_required_bytes_unsigned_integer, read_unsigned_int
 from timebox.utils.pandas_utils import parse_pandas_dtype
 from timebox.constants import *
-from timebox.timebox_tag import TimeBoxTag, NumBytesByteCodeTuple
+from timebox.timebox_tag import TimeBoxTag, NUM_BYTES_PER_DEFINITION_WITHOUT_IDENTIFIER
 from timebox.exceptions import *
 
 
@@ -23,8 +23,7 @@ class TimeBox:
         self._tag_names_are_strings = False
         self._date_differentials_stored = True
         self._num_points = 0
-        self._tag_definitions = {}  # like { int|string tag_identifier }
-        self._data = {}  # like { tag_identifier: numpy array }
+        self._tags = {}  # like { int|string tag_identifier : TimeBoxTag }
         self._start_date = None
         self._seconds_between_points = 0
         self._bytes_per_date_differential = 0
@@ -47,7 +46,10 @@ class TimeBox:
         """
         tb = TimeBox.from_pandas(df)
         tb.file_path = file_path
-        tb.write()
+        try:
+            tb.write()
+        except DateUnitsError:
+            raise InvalidPandasIndexError('There was an error reading the date-time index on data frame')
         return tb
 
     @classmethod
@@ -74,15 +76,9 @@ class TimeBox:
         # get column names and info
         for c in df.columns:
             type_info = parse_pandas_dtype(df[c].dtype)
-            tb._tag_definitions[c] = TimeBoxTag(c, type_info[0], type_info[1])
-            tb._data[c] = df[c].values
+            tb._tags[c] = TimeBoxTag(c, type_info[0], type_info[1])
+            tb._tags[c].data = df[c].values
 
-        # validate the TimeBox dates are good by calculating the date differentials.
-        try:
-            tb._calculate_date_differentials()
-            tb._compress_date_differentials()
-        except DateUnitsError:
-            raise InvalidPandasIndexError('There was an error reading the date-time index on data frame')
         return tb
 
     def to_pandas(self) -> pd.DataFrame:
@@ -91,9 +87,9 @@ class TimeBox:
         :return: Pandas DataFrame
         """
         # check if haven't read
-        if len(self._data) == 0:
+        if len([t for t in self._tags if self._tags[t].data is None]) == 0:
             self.read()
-        data = [(t, self._data[t]) for t in self._data]
+        data = [(t, self._tags[t].data) for t in self._tags]
         data.append(('DateTimes', self._dates))
         df = pd.DataFrame.from_items(data)
         return df.set_index('DateTimes')
@@ -160,11 +156,11 @@ class TimeBox:
         :return: void, updates class internals
         """
         if self._tag_names_are_strings:
-            max_length = max([len(k) for k in self._tag_definitions])
+            max_length = max([len(k) for k in self._tags])
             self._num_bytes_for_tag_identifier = max_length * 4
         else:
             self._num_bytes_for_tag_identifier = determine_required_bytes_unsigned_integer(
-                max([k for k in self._tag_definitions])
+                max([k for k in self._tags])
             )
         return
 
@@ -175,8 +171,11 @@ class TimeBox:
         :return: void, populates class internals
         """
         # starting with the right-most bits and working left
-        self._tag_names_are_strings = True if (from_int >> TAG_NAME_BIT_POSITION) & 1 else False
-        self._date_differentials_stored = True if (from_int >> DATE_DIFFERENTIALS_STORED_POSITION) & 1 else False
+        tag_name_result = (from_int >> TimeBoxOptionPositions.TAG_NAME_BIT_POSITION.value) & 1
+        self._tag_names_are_strings = True if tag_name_result else False
+
+        date_diff_result = (from_int >> TimeBoxOptionPositions.DATE_DIFFERENTIALS_STORED_POSITION.value) & 1
+        self._date_differentials_stored = True if date_diff_result else False
         return
 
     def _encode_options(self) -> int:
@@ -205,8 +204,8 @@ class TimeBox:
         bytes_seek = 1 + 2 + 1 + 4 + 1
 
         # first 2 bytes are info on the tag
-        bytes_for_tag_def = num_tags * (1 + 1 + self._num_bytes_for_tag_identifier)
-        self._tag_definitions = TimeBoxTag.tag_definitions_from_bytes(
+        bytes_for_tag_def = num_tags * (self._num_bytes_for_tag_identifier+NUM_BYTES_PER_DEFINITION_WITHOUT_IDENTIFIER)
+        self._tags = TimeBoxTag.tag_definitions_from_bytes(
             file_handle.read(bytes_for_tag_def),
             self._num_bytes_for_tag_identifier,
             self._tag_names_are_strings
@@ -239,7 +238,7 @@ class TimeBox:
         """
         np.array([np.uint8(self._timebox_version)], dtype=np.uint8).tofile(file_handle)
         np.array([np.uint16(self._encode_options())], dtype=np.uint16).tofile(file_handle)
-        np.array([np.uint8(len(self._tag_definitions))], dtype=np.uint8).tofile(file_handle)
+        np.array([np.uint8(len(self._tags))], dtype=np.uint8).tofile(file_handle)
         np.array([np.uint32(self._num_points)], dtype=np.uint32).tofile(file_handle)
 
         self._update_required_bytes_for_tag_identifier()
@@ -247,7 +246,7 @@ class TimeBox:
         bytes_seek = 1 + 2 + 1 + 4 + 1
 
         tags_to_bytes_result = TimeBoxTag.tag_list_to_bytes(
-            [self._tag_definitions[t] for t in self._tag_definitions],
+            [self._tags[t] for t in self._tags],
             self._num_bytes_for_tag_identifier,
             self._tag_names_are_strings
         )
@@ -275,15 +274,13 @@ class TimeBox:
         This method checks the data to ensure that the tag data is within date ranges, etc.
         :return: void
         """
-        if len(self._tag_definitions) != len(self._data):
-            raise DataDoesNotMatchTagDefinitionError('Tag definition length is different than tag data length')
-        if len([t for t in self._tag_definitions if t not in self._data]) > 0:
-            raise DataDoesNotMatchTagDefinitionError('Tag identifier in tag definitions not found in data')
-        for t in self._tag_definitions:
-            if self._data[t].dtype != self._tag_definitions[t].dtype:
+        if len([t for t in self._tags if self._tags[t].data is None]) > 0:
+            raise DataDoesNotMatchTagDefinitionError('Missing data')
+        for t in self._tags:
+            if self._tags[t].data.dtype != self._tags[t].dtype:
                 raise DataDoesNotMatchTagDefinitionError('Data for tag {} does not have correct '
-                                                         'dtype {}'.format(t, self._tag_definitions[t].dtype))
-            if self._data[t].size != self._num_points:
+                                                         'dtype {}'.format(t, self._tags[t].dtype))
+            if self._tags[t].data.size != self._num_points:
                 raise DataShapeError('Data for tag {} does not have the correct shape'.format(t))
 
         if self._date_differentials_stored:
@@ -306,9 +303,9 @@ class TimeBox:
         seek_bytes = 0
 
         # then write out file data
-        for t in self._data:
-            seek_bytes += self._data[t].nbytes
-            self._data[t].tofile(file_handle)
+        for t in self._tags:
+            seek_bytes += self._tags[t].data.nbytes
+            self._tags[t].data.tofile(file_handle)
         return seek_bytes
 
     def _read_tag_data(self, file_handle) -> int:
@@ -318,12 +315,11 @@ class TimeBox:
         :return: int, seek bytes advanced in this method
         """
         seek_bytes = 0
-        self._data = {}
-        for t in self._tag_definitions:
-            seek_bytes += self._num_points * self._tag_definitions[t].bytes_per_value
-            self._data[t] = np.fromfile(
+        for t in self._tags:
+            seek_bytes += self._num_points * self._tags[t].bytes_per_value
+            self._tags[t].data = np.fromfile(
                 file_handle,
-                dtype=get_numpy_type(self._tag_definitions[t].type_char, 8 * self._tag_definitions[t].bytes_per_value),
+                dtype=get_numpy_type(self._tags[t].type_char, 8 * self._tags[t].bytes_per_value),
                 count=self._num_points
             )
         return seek_bytes
@@ -410,30 +406,33 @@ class TimeBox:
         if mode == 'r':
             # check and see if a blocking file exists, meaning we're waiting for a write job to clear
             # then try to get the lock
-            while not file_locked and count < (self._MAX_READ_BLOCK_WAIT_SECONDS / sleep_seconds):
+            while not file_locked and count <= (self._MAX_READ_BLOCK_WAIT_SECONDS / sleep_seconds):
                 if not os.path.exists(block_file_name):
                     try:
                         flock(handle, LOCK_SH | LOCK_NB)
                         file_locked = True
+                        break
                     except IOError:
                         pass
                 count += 1
                 time.sleep(sleep_seconds)
         if mode == 'w':
             block_file_is_mine = False
-            while not file_locked and count < (self._MAX_WRITE_BLOCK_WAIT_SECONDS / sleep_seconds):
+            while not file_locked and count <= (self._MAX_WRITE_BLOCK_WAIT_SECONDS / sleep_seconds):
                 if not os.path.exists(block_file_name):
                     # put a blocking file
                     open(block_file_name, 'w').close()
                     block_file_is_mine = True
-                if block_file_is_mine and os.path.exists(block_file_name):
+                elif not block_file_is_mine:  # file does exist, but it's not mine, wait patiently
+                    time.sleep(sleep_seconds)
+                else:  # file exists and it's mine
                     try:
                         flock(handle, LOCK_EX | LOCK_NB)
                         file_locked = True
                     except IOError:
+                        time.sleep(sleep_seconds)
                         pass
                 count += 1
-                time.sleep(sleep_seconds)
             if not file_locked and block_file_is_mine and os.path.exists(block_file_name):
                 os.remove(block_file_name)
         if not file_locked:

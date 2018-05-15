@@ -13,18 +13,18 @@ def example_time_box(file_name: str):
     tb._tag_names_are_strings = False
     tb._date_differentials_stored = False
     tb._num_points = 4
-    tb._tag_definitions = {
+    tb._tags = {
         0: TimeBoxTag(0, 1, 'u'),
         1: TimeBoxTag(1, 2, 'i'),
         2: TimeBoxTag(2, 4, 'f')
     }
     tb._start_date = np.datetime64('2018-01-01', 's')
     tb._seconds_between_points = 3600
-    tb._data = {
-        0: np.array([1, 2, 3, 4], dtype=np.uint8),
-        1: np.array([-4, -2, 0, 2000], dtype=np.int16),
-        2: np.array([5.2, 0.8, 3.1415, 8], dtype=np.float32)
-    }
+
+    tb._tags[0].data = np.array([1, 2, 3, 4], dtype=np.uint8)
+    tb._tags[1].data = np.array([-4, -2, 0, 2000], dtype=np.int16)
+    tb._tags[2].data = np.array([5.2, 0.8, 3.1415, 8], dtype=np.float32)
+
     return tb
 
 
@@ -61,16 +61,14 @@ class TestTimeBoxReadWrite(unittest.TestCase):
         self.assertEqual(tb._start_date, tb_read._start_date)
         self.assertEqual(tb._bytes_per_date_differential, tb_read._bytes_per_date_differential)
         self.assertEqual(tb._date_differential_units, tb_read._date_differential_units)
-        for t in tb._tag_definitions:
-            self.assertTrue(t in tb_read._tag_definitions)
-            self.assertEqual(tb._tag_definitions[t].identifier, tb_read._tag_definitions[t].identifier)
-            self.assertEqual(tb._tag_definitions[t].type_char, tb_read._tag_definitions[t].type_char)
-            self.assertEqual(tb._tag_definitions[t].dtype, tb_read._tag_definitions[t].dtype)
-            self.assertEqual(tb._tag_definitions[t].bytes_per_value, tb_read._tag_definitions[t].bytes_per_value)
-
-        for t in tb._data:
+        for t in tb._tags:
+            self.assertTrue(t in tb_read._tags)
+            self.assertEqual(tb._tags[t].identifier, tb_read._tags[t].identifier)
+            self.assertEqual(tb._tags[t].type_char, tb_read._tags[t].type_char)
+            self.assertEqual(tb._tags[t].dtype, tb_read._tags[t].dtype)
+            self.assertEqual(tb._tags[t].bytes_per_value, tb_read._tags[t].bytes_per_value)
             for i in range(0, tb._num_points):
-                self.assertEqual(tb._data[t][i], tb_read._data[t][i])
+                self.assertEqual(tb._tags[t].data[i], tb_read._tags[t].data[i])
 
         os.remove(file_name)
         return

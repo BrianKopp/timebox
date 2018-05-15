@@ -11,18 +11,16 @@ def example_time_box(file_name: str):
     tb._tag_names_are_strings = True
     tb._date_differentials_stored = False
     tb._num_points = 4
-    tb._tag_definitions = {
+    tb._tags = {
         'tag_0': TimeBoxTag('tag_0', 1, 'u'),
         'tag_1': TimeBoxTag('tag_1', 2, 'i'),
         'tag_2_long_name': TimeBoxTag('tag_2_long_name', 4, 'f')
     }
     tb._start_date = np.datetime64('2018-01-01', 's')
     tb._seconds_between_points = 3600
-    tb._data = {
-        'tag_0': np.array([1, 2, 3, 4], dtype=np.uint8),
-        'tag_1': np.array([-4, -2, 0, 2000], dtype=np.int16),
-        'tag_2_long_name': np.array([5.2, 0.8, 3.1415, 8], dtype=np.float32)
-    }
+    tb._tags['tag_0'].data = np.array([1, 2, 3, 4], dtype=np.uint8)
+    tb._tags['tag_1'].data = np.array([-4, -2, 0, 2000], dtype=np.int16)
+    tb._tags['tag_2_long_name'].data = np.array([5.2, 0.8, 3.1415, 8], dtype=np.float32)
     return tb
 
 
@@ -37,14 +35,10 @@ class TestTimeBoxTagStringName(unittest.TestCase):
         tb_read = TimeBox(file_name)
         tb_read.read()
         self.assertTrue(tb_read._tag_names_are_strings)
-        self.assertEqual(3, len(tb_read._tag_definitions))
-        self.assertEqual(3, len(tb_read._data))
-        self.assertTrue('tag_0' in tb_read._tag_definitions)
-        self.assertTrue('tag_1' in tb_read._tag_definitions)
-        self.assertTrue('tag_2_long_name' in tb_read._tag_definitions)
-        self.assertTrue('tag_0' in tb_read._data)
-        self.assertTrue('tag_1' in tb_read._data)
-        self.assertTrue('tag_2_long_name' in tb_read._data)
+        self.assertEqual(3, len(tb_read._tags))
+        self.assertTrue('tag_0' in tb_read._tags)
+        self.assertTrue('tag_1' in tb_read._tags)
+        self.assertTrue('tag_2_long_name' in tb_read._tags)
 
         os.remove(file_name)
         return

@@ -13,17 +13,17 @@ def example_time_box(file_name: str):
     tb._tag_names_are_strings = False
     tb._date_differentials_stored = True
     tb._num_points = 4
-    tb._tag_definitions = {
+    tb._tags = {
         0: TimeBoxTag(0, 1, 'u'),
         1: TimeBoxTag(1, 2, 'i'),
         2: TimeBoxTag(2, 4, 'f')
     }
     tb._start_date = np.datetime64('2018-01-01', 's')
-    tb._data = {
-        0: np.array([1, 2, 3, 4], dtype=np.uint8),
-        1: np.array([-4, -2, 0, 2000], dtype=np.int16),
-        2: np.array([5.2, 0.8, 3.1415, 8], dtype=np.float32)
-    }
+
+    tb._tags[0].data = np.array([1, 2, 3, 4], dtype=np.uint8)
+    tb._tags[1].data = np.array([-4, -2, 0, 2000], dtype=np.int16)
+    tb._tags[2].data = np.array([5.2, 0.8, 3.1415, 8], dtype=np.float32)
+
     tb._date_differentials = np.array([1, 1, 1], dtype=np.uint8)
     tb._date_differential_units = DAYS
     tb._bytes_per_date_differential = 1
