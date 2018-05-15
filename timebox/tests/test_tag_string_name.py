@@ -1,10 +1,8 @@
-from ..timebox import TimeBox
-from ..exceptions import *
-from ..tag_info import TagInfo
+from timebox.timebox import TimeBox
+from timebox.timebox_tag import TimeBoxTag
 import unittest
 import numpy as np
 import os
-import fcntl
 
 
 def example_time_box(file_name: str):
@@ -14,9 +12,9 @@ def example_time_box(file_name: str):
     tb._date_differentials_stored = False
     tb._num_points = 4
     tb._tag_definitions = {
-        'tag_0': TagInfo('tag_0', 1, 'u'),
-        'tag_1': TagInfo('tag_1', 2, 'i'),
-        'tag_2_long_name': TagInfo('tag_2_long_name', 4, 'f')
+        'tag_0': TimeBoxTag('tag_0', 1, 'u'),
+        'tag_1': TimeBoxTag('tag_1', 2, 'i'),
+        'tag_2_long_name': TimeBoxTag('tag_2_long_name', 4, 'f')
     }
     tb._start_date = np.datetime64('2018-01-01', 's')
     tb._seconds_between_points = 3600

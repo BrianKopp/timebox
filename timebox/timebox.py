@@ -3,15 +3,13 @@ import pandas as pd
 import os
 import time
 from fcntl import flock, LOCK_EX, LOCK_SH, LOCK_UN, LOCK_NB
-from .utils.datetime_utils import compress_time_delta_array, get_unit_data
-from .utils.numpy_utils import *
-from .utils.validation import ensure_int
-from .utils.exceptions import NotIntegerException
-from .utils.binary import determine_required_bytes_unsigned_integer, read_unsigned_int
-from .utils.pandas_utils import parse_pandas_dtype
-from .constants import *
-from .tag_info import TagInfo
-from .exceptions import *
+from timebox.utils.datetime_utils import compress_time_delta_array, get_unit_data
+from timebox.utils.numpy_utils import *
+from timebox.utils.binary import determine_required_bytes_unsigned_integer, read_unsigned_int
+from timebox.utils.pandas_utils import parse_pandas_dtype
+from timebox.constants import *
+from timebox.timebox_tag import TimeBoxTag, NumBytesByteCodeTuple
+from timebox.exceptions import *
 
 
 MAX_WRITE_BLOCK_WAIT_SECONDS = 60
@@ -19,18 +17,18 @@ MAX_READ_BLOCK_WAIT_SECONDS = 30
 
 
 class TimeBox:
-    def __init__(self, file_path: str):
+    def __init__(self, file_path=None):
         self.file_path = file_path
         self._timebox_version = 1
         self._tag_names_are_strings = False
         self._date_differentials_stored = True
         self._num_points = 0
         self._tag_definitions = {}  # like { int|string tag_identifier }
+        self._data = {}  # like { tag_identifier: numpy array }
         self._start_date = None
         self._seconds_between_points = 0
         self._bytes_per_date_differential = 0
         self._date_differential_units = 0
-        self._data = {}  # like { tag_identifier: numpy array }
         self._date_differentials = None  # numpy array
         self._dates = None  # numpy array of datetime64[s]
         self._MAX_WRITE_BLOCK_WAIT_SECONDS = MAX_WRITE_BLOCK_WAIT_SECONDS
@@ -47,10 +45,24 @@ class TimeBox:
         :param file_path: file path to save pandas DataFrame
         :return: TimeBox object
         """
+        tb = TimeBox.from_pandas(df)
+        tb.file_path = file_path
+        tb.write()
+        return tb
+
+    @classmethod
+    def from_pandas(cls, df: pd.DataFrame):
+        """
+        Expects that the passing df has an index that is type Timestamp
+        or string which can be converted to Timestamp. All dtypes in pandas
+        data frame must be in the float/int/u-int family
+        :param df: pandas DataFrame
+        :return: TimeBox object
+        """
         # make sure the pandas data frame is sorted on date
         df = df.sort_index()
 
-        tb = TimeBox(file_path)
+        tb = TimeBox()
         tb._tag_names_are_strings = True
 
         # ensure index is there and can be converted to numpy array of datetime64s
@@ -62,35 +74,16 @@ class TimeBox:
         # get column names and info
         for c in df.columns:
             type_info = parse_pandas_dtype(df[c].dtype)
-            tb._tag_definitions[c] = TagInfo(c, type_info[0], type_info[1])
+            tb._tag_definitions[c] = TimeBoxTag(c, type_info[0], type_info[1])
             tb._data[c] = df[c].values
 
+        # validate the TimeBox dates are good by calculating the date differentials.
         try:
-            tb.write()
+            tb._calculate_date_differentials()
+            tb._compress_date_differentials()
         except DateUnitsError:
             raise InvalidPandasIndexError('There was an error reading the date-time index on data frame')
         return tb
-
-    @classmethod
-    def _get_tag_info_dtype(cls, num_bytes_for_tag_identifier: int, tag_identifier_is_string: bool) -> np.dtype:
-        """
-        gets a dtype object that will be used to extract tag name info
-        :param num_bytes_for_tag_identifier: number of bytes used in the unsigned int or unicode tag identifier
-        :param tag_identifier_is_string: if True, tag identifier will be treated as 4-byte unicode. if False, int
-        :return: dtype object
-        """
-        if tag_identifier_is_string:
-            if num_bytes_for_tag_identifier <= 0:
-                raise TagIdentifierByteRepresentationError('Number of bytes for tag identifier cannot be zero')
-            try:
-                id_type = np.dtype([('tag_identifier', '<U{}'.format(ensure_int(num_bytes_for_tag_identifier / 4)))])
-            except NotIntegerException:
-                raise TagIdentifierByteRepresentationError(
-                    'Number of bytes for tag identifier must be multiple of 4'
-                )
-        else:
-            id_type = np.dtype([('tag_identifier', get_numpy_type('u', num_bytes_for_tag_identifier * 8))])
-        return np.dtype([id_type.descr[0], ('bytes_per_point', np.uint8), ('type_char', np.uint8)])
 
     def to_pandas(self) -> pd.DataFrame:
         """
@@ -105,25 +98,74 @@ class TimeBox:
         df = pd.DataFrame.from_items(data)
         return df.set_index('DateTimes')
 
-    def _unpack_tag_definitions(self, from_bytes: str):
+    def read(self):
         """
-        Reads the tag definitions from bytes
-        :param from_bytes: string representation of binary bytes read from a file
-        :return: void, populates class internals
+        This function reads the entire file contents into memory.
+        Later it can be improved to only read certain tags/dates
+        :return: dictionary of results like {tag_identifier: numpy.array}
         """
-        tags = np.frombuffer(
-            from_bytes,
-            dtype=TimeBox._get_tag_info_dtype(
-                self._num_bytes_for_tag_identifier,
-                self._tag_names_are_strings
+        with self._get_fcntl_lock('r') as handle:
+            try:
+                # read in the data
+                self._read_file_info(handle)
+
+                if self._date_differentials_stored:
+                    self._read_date_deltas(handle)
+
+                self._read_tag_data(handle)
+            finally:
+                # release shared lock
+                flock(handle, LOCK_UN)
+        return
+
+    def write(self):
+        """
+        writes the file out to file_name.
+        requires an exclusive LOCK_EX fcntl lock.
+        blocks until it can get a lock
+        :return: void
+        """
+        # put a file in the same directory to block new shared requests
+        # this prevents a popular file from blocking forever
+        # note, this is a blocking function as it waits for other write events to finish
+        file_is_new = not os.path.exists(self.file_path)
+        with self._get_fcntl_lock('w') as handle:
+            try:
+                # prepare datetime data
+                if self._date_differentials_stored:
+                    self._calculate_date_differentials()
+                    self._compress_date_differentials()
+
+                self._write_file_info(handle)
+
+                if self._date_differentials_stored:
+                    self._write_date_deltas(handle)
+
+                self._write_tag_data(handle)
+            except (InvalidPandasDataTypeError, InvalidPandasIndexError, DateDataError, DateUnitsError,
+                    DateUnitsGranularityError, CompressionError, CompressionModeInvalidError) as e:
+                if file_is_new:
+                    os.remove(self.file_path)
+                raise e
+            finally:
+                flock(handle, LOCK_UN)  # release lock
+                block_file_name = self._blocking_file_name()
+                if os.path.exists(block_file_name):
+                    os.remove(block_file_name)
+        return
+
+    def _update_required_bytes_for_tag_identifier(self):
+        """
+        Looks at the tag list and determines what the max bytes required is
+        :return: void, updates class internals
+        """
+        if self._tag_names_are_strings:
+            max_length = max([len(k) for k in self._tag_definitions])
+            self._num_bytes_for_tag_identifier = max_length * 4
+        else:
+            self._num_bytes_for_tag_identifier = determine_required_bytes_unsigned_integer(
+                max([k for k in self._tag_definitions])
             )
-        )
-        self._tag_definitions = dict(
-            [(
-                t['tag_identifier'],
-                TagInfo(t['tag_identifier'], t['bytes_per_point'], t['type_char'])
-            ) for t in tags]
-        )
         return
 
     def _unpack_options(self, from_int: int):
@@ -149,38 +191,6 @@ class TimeBox:
         options |= 1 if self._tag_names_are_strings else 0
         return options
 
-    def _update_required_bytes_for_tag_identifier(self):
-        """
-        Looks at the tag list and determines what the max bytes required is
-        :return: void, updates class internals
-        """
-        if self._tag_names_are_strings:
-            max_length = max([len(k) for k in self._tag_definitions])
-            self._num_bytes_for_tag_identifier = max_length * 4
-        else:
-            self._num_bytes_for_tag_identifier = determine_required_bytes_unsigned_integer(
-                max([k for k in self._tag_definitions])
-            )
-        return
-
-    def _tag_definitions_to_bytes(self) -> (int, bytes):
-        """
-        returns the tag definitions in binary form
-        :return: tuple of number of bytes and then the actual bytes
-        """
-        a = np.array(
-            [
-                (
-                    t,
-                    self._tag_definitions[t].bytes_per_value,
-                    get_type_char_int(self._tag_definitions[t].type_char)
-                )
-                for t in self._tag_definitions
-            ],
-            dtype=TimeBox._get_tag_info_dtype(self._num_bytes_for_tag_identifier, self._tag_names_are_strings)
-        )
-        return a.nbytes, a.tobytes()
-
     def _read_file_info(self, file_handle) -> int:
         """
         Reads the file info from a file_handle. Populates file internals
@@ -196,7 +206,11 @@ class TimeBox:
 
         # first 2 bytes are info on the tag
         bytes_for_tag_def = num_tags * (1 + 1 + self._num_bytes_for_tag_identifier)
-        self._unpack_tag_definitions(file_handle.read(bytes_for_tag_def))
+        self._tag_definitions = TimeBoxTag.tag_definitions_from_bytes(
+            file_handle.read(bytes_for_tag_def),
+            self._num_bytes_for_tag_identifier,
+            self._tag_names_are_strings
+        )
         bytes_seek += bytes_for_tag_def
 
         self._start_date = np.fromfile(file_handle, dtype='datetime64[s]', count=1)[0]
@@ -232,9 +246,13 @@ class TimeBox:
         np.array([np.uint8(self._num_bytes_for_tag_identifier)], dtype=np.uint8).tofile(file_handle)
         bytes_seek = 1 + 2 + 1 + 4 + 1
 
-        tag_definition_bytes = self._tag_definitions_to_bytes()
-        file_handle.write(tag_definition_bytes[1])
-        bytes_seek += tag_definition_bytes[0]
+        tags_to_bytes_result = TimeBoxTag.tag_list_to_bytes(
+            [self._tag_definitions[t] for t in self._tag_definitions],
+            self._num_bytes_for_tag_identifier,
+            self._tag_names_are_strings
+        )
+        file_handle.write(tags_to_bytes_result.byte_code)
+        bytes_seek += tags_to_bytes_result.num_bytes
 
         np.array([np.datetime64(self._start_date, dtype='datetime64[s]')]).tofile(file_handle)
         bytes_seek += 8
@@ -422,53 +440,3 @@ class TimeBox:
             handle.close()
             raise CouldNotAcquireFileLockError
         return handle
-
-    def read(self):
-        """
-        This function reads the entire file contents into memory.
-        Later it can be improved to only read certain tags/dates
-        :return: dictionary of results like {tag_identifier: numpy.array}
-        """
-        with self._get_fcntl_lock('r') as handle:
-            try:
-                # read in the data
-                self._read_file_info(handle)
-
-                if self._date_differentials_stored:
-                    self._read_date_deltas(handle)
-
-                self._read_tag_data(handle)
-            finally:
-                # release shared lock
-                flock(handle, LOCK_UN)
-        return
-
-    def write(self):
-        """
-        writes the file out to file_name.
-        requires an exclusive LOCK_EX fcntl lock.
-        blocks until it can get a lock
-        :return: void
-        """
-        # put a file in the same directory to block new shared requests
-        # this prevents a popular file from blocking forever
-        # note, this is a blocking function as it waits for other write events to finish
-        with self._get_fcntl_lock('w') as handle:
-            try:
-                # prepare datetime data
-                if self._date_differentials_stored:
-                    self._calculate_date_differentials()
-                    self._compress_date_differentials()
-
-                self._write_file_info(handle)
-
-                if self._date_differentials_stored:
-                    self._write_date_deltas(handle)
-
-                self._write_tag_data(handle)
-            finally:
-                flock(handle, LOCK_UN)  # release lock
-                block_file_name = self._blocking_file_name()
-                if os.path.exists(block_file_name):
-                    os.remove(block_file_name)
-        return

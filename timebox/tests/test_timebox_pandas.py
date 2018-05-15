@@ -1,6 +1,5 @@
-from ..timebox import TimeBox
-from ..utils.exceptions import InvalidPandasIndexError
-from ..utils.datetime_utils import get_unit_data
+from timebox.timebox import TimeBox
+from timebox.utils.exceptions import InvalidPandasIndexError
 import pandas as pd
 import numpy as np
 import unittest
@@ -10,7 +9,7 @@ import os
 class TestTimeBoxPandas(unittest.TestCase):
     def test_save_pandas(self):
         file_name = 'save_pandas.npb'
-        df = pd.read_csv('timebox/tests/ETH-USD_combined.csv', index_col=0)
+        df = pd.read_csv('timebox/tests/ETH-USD_combined_utc.csv', index_col=0)
         tb = TimeBox.save_pandas(df, file_name)
         self.assertTrue(os.path.exists(file_name))
 

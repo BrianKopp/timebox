@@ -1,5 +1,5 @@
 import unittest
-from ..numpy_utils import *
+from timebox.utils.numpy_utils import *
 
 
 class TestNumpyUtils(unittest.TestCase):

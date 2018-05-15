@@ -1,5 +1,5 @@
-from ..validation import ensure_int
-from ..exceptions import NotIntegerException
+from timebox.utils.validation import ensure_int
+from timebox.utils.exceptions import NotIntegerException
 import unittest
 
 

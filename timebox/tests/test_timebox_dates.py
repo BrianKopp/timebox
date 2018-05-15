@@ -1,6 +1,6 @@
-from ..exceptions import *
-from ..timebox import TimeBox
-from ..tag_info import TagInfo
+from timebox.exceptions import *
+from timebox.timebox import TimeBox
+from timebox.timebox_tag import TimeBoxTag
 from ..utils.datetime_utils import DAYS, HOURS
 import unittest
 import numpy as np
@@ -14,9 +14,9 @@ def example_time_box(file_name: str):
     tb._date_differentials_stored = True
     tb._num_points = 4
     tb._tag_definitions = {
-        0: TagInfo(0, 1, 'u'),
-        1: TagInfo(1, 2, 'i'),
-        2: TagInfo(2, 4, 'f')
+        0: TimeBoxTag(0, 1, 'u'),
+        1: TimeBoxTag(1, 2, 'i'),
+        2: TimeBoxTag(2, 4, 'f')
     }
     tb._start_date = np.datetime64('2018-01-01', 's')
     tb._data = {
@@ -158,6 +158,23 @@ class TestTimeBoxDateData(unittest.TestCase):
         self.assertEqual(19+24, tb_new._date_differentials[2])
 
         os.remove(file_name)
+        return
+
+    def test_time_box_date_io_error(self):
+        file_name = 'date_io.npb'
+        tb = example_time_box(file_name)
+        tb._date_differentials = None
+        tb._dates = np.array(
+            [
+                np.datetime64('2018-01-01T00:00', 's'),
+                np.datetime64('2018-01-02T12:00', 's'),
+                np.datetime64('2018-01-01T05:00', 's'),
+                np.datetime64('2018-01-05T00:00', 's')
+            ]
+        )
+        with self.assertRaises(DateDataError):
+            tb.write()
+        self.assertFalse(os.path.exists(file_name))
         return
 
 if __name__ == '__main__':

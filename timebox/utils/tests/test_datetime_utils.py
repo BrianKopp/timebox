@@ -1,7 +1,7 @@
 import numpy as np
 import unittest
-from ..datetime_utils import *
-from ..exceptions import DateUnitsError, DateUnitsGranularityError
+from timebox.utils.datetime_utils import *
+from timebox.utils.exceptions import DateUnitsError, DateUnitsGranularityError
 
 
 class TestDateTimeUtils(unittest.TestCase):

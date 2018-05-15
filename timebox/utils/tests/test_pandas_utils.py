@@ -1,7 +1,7 @@
 import unittest
 import numpy as np
-from ..pandas_utils import parse_pandas_dtype
-from ..exceptions import InvalidPandasDataTypeError
+from timebox.utils.pandas_utils import parse_pandas_dtype
+from timebox.utils.exceptions import InvalidPandasDataTypeError
 
 
 class TestPandasUtils(unittest.TestCase):

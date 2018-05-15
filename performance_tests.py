@@ -5,7 +5,7 @@ from timebox.timebox import TimeBox
 from time import time
 
 
-reference_file = 'timebox/tests/ETH-USD_combined.csv'
+reference_file = 'timebox/tests/ETH-USD_combined_utc.csv'
 
 start = time()
 df = pd.read_csv(reference_file, index_col=0)

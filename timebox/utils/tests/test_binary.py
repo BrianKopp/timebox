@@ -1,5 +1,5 @@
-from ..binary import determine_required_bytes_unsigned_integer, read_unsigned_int
-from ..exceptions import (
+from timebox.utils.binary import determine_required_bytes_unsigned_integer, read_unsigned_int
+from timebox.utils.exceptions import (
     IntegerLargerThan64BitsException,
     IntegerNotUnsignedException,
     NotIntegerException

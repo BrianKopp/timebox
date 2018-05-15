@@ -1,5 +1,5 @@
-from ..exceptions import *
-from ..numpy_utils import compress_array
+from timebox.utils.exceptions import *
+from timebox.utils.numpy_utils import compress_array
 import unittest
 import numpy as np
 

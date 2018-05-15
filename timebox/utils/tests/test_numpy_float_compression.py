@@ -1,7 +1,7 @@
 import unittest
 import numpy as np
-from ..numpy_utils import compress_float_array
-from ..exceptions import *
+from timebox.utils.numpy_utils import compress_float_array
+from timebox.utils.exceptions import *
 
 
 class TestNumpyFloatCompression(unittest.TestCase):
