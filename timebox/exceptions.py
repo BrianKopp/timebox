@@ -18,3 +18,5 @@ class DateDataError(ValueError):
     pass
 
 
+class CouldNotCalculateNumBytesError(ValueError):
+    pass

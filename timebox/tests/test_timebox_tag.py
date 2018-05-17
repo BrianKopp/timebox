@@ -16,13 +16,20 @@ class TestTimeBoxTag(unittest.TestCase):
         self.assertEqual(np.float32, tag_info.dtype)
 
         self.assertEqual(None, tag_info.data)
-        self.assertEqual(None, tag_info.compressed_type_char)
-        self.assertEqual(None, tag_info.compressed_bytes_per_value)
-        self.assertEqual(None, tag_info.compression_mode)
-        self.assertEqual(None, tag_info.num_decimals_to_store)
+        self.assertEqual(None, tag_info._encoded_data)
+        self.assertEqual(None, tag_info.num_points)
+
         self.assertFalse(tag_info.use_compression)
         self.assertFalse(tag_info.use_hash_table)
         self.assertFalse(tag_info.floating_point_rounded)
+
+        self.assertEqual(None, tag_info._compressed_type_char)
+        self.assertEqual(None, tag_info._compressed_bytes_per_value)
+        self.assertEqual(None, tag_info._compression_mode)
+        self.assertEqual(None, tag_info._compression_reference_value)
+        self.assertEqual(tag_info.dtype, tag_info._compression_reference_value_dtype)
+
+        self.assertEqual(None, tag_info.num_decimals_to_store)
         self.assertEqual(0, tag_info.num_bytes_extra_information)
 
         tag_info = TimeBoxTag('my_id', 4, 'f', options=1)
@@ -94,21 +101,26 @@ class TestTimeBoxTag(unittest.TestCase):
         encoded_bytes = t._encode_def_bytes()
         self.assertEqual(encoded_bytes, b''.join([b'\x00' for _ in range(0, 32)]))
         t.use_compression = True
-        t.compression_mode = 'e'
-        t.compressed_bytes_per_value = 2
-        t.compressed_type_char = 'u'
+        t._compression_mode = 'e'
+        t._compressed_bytes_per_value = 2
+        t._compressed_type_char = 'u'
+        t._compression_reference_value = 5
+        t._compression_reference_value_dtype = np.dtype(np.uint64)
         encoded_bytes = t._encode_def_bytes()
         self.assertEqual(101, encoded_bytes[0])
         self.assertEqual(2, encoded_bytes[1])
         self.assertEqual(117, encoded_bytes[2])
-        self.assertEqual(0, encoded_bytes[3])
+        self.assertEqual(8, encoded_bytes[3])
+        self.assertEqual(117, encoded_bytes[4])
+        self.assertEqual(5, encoded_bytes[5])
 
         t = TimeBoxTag(0, 8, 'u', options=1)
         t._decode_def_bytes(encoded_bytes)
         self.assertTrue(t.use_compression)
-        self.assertEqual('e', t.compression_mode)
-        self.assertEqual(2, t.compressed_bytes_per_value)
-        self.assertEqual('u', t.compressed_type_char)
+        self.assertEqual('e', t._compression_mode)
+        self.assertEqual(2, t._compressed_bytes_per_value)
+        self.assertEqual('u', t._compressed_type_char)
+        self.assertEqual(5, t._compression_reference_value)
         return
 
     def test_encode_decode_def_bytes_floating_point_rounding(self):
@@ -128,7 +140,7 @@ class TestTimeBoxTag(unittest.TestCase):
 
     def test_tag_to_bytes(self):
         t = TimeBoxTag(1, 8, 'u', options=0)
-        t_byte_result = t.to_bytes(1, False)
+        t_byte_result = t.info_to_bytes(1, False)
         self.assertEqual(41, t_byte_result[0])
         t_bytes = t_byte_result.byte_code
         self.assertEqual(1, t_bytes[0])  # identifier

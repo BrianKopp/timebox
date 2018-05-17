@@ -1,11 +1,13 @@
 import numpy as np
 from collections import namedtuple
 from typing import Union
-from timebox.utils.numpy_utils import get_numpy_type, get_type_char_char, get_type_char_int
+from timebox.utils.numpy_utils import get_numpy_type, get_type_char_char,\
+    get_type_char_int, compress_array, decompress_array
 from timebox.exceptions import TagIdentifierByteRepresentationError
 from timebox.utils.exceptions import NotIntegerException
 from timebox.utils.validation import ensure_int
 from timebox.constants import TimeBoxTagOptionPositions
+from math import pow
 
 
 NumBytesByteCodeTuple = namedtuple('TagToBytesResult', ['num_bytes', 'byte_code'])
@@ -13,7 +15,16 @@ NUM_BYTES_PER_DEFINITION_WITHOUT_IDENTIFIER = 40
 
 
 class TimeBoxTag:
-    def __init__(self, identifier, bytes_per_value: int, type_char: Union[int, str], options=None, untyped_bytes=None):
+    def __init__(self, identifier, bytes_per_value: int, type_char: Union[int, str],
+                 options=None, untyped_bytes=None):
+        """
+        Initializes a TimeBoxTag object
+        :param identifier: unique id for tag
+        :param bytes_per_value: number of bytes needed to store the data in an uncompressed form
+        :param type_char: 'i', 'u', or 'f' describing type of data
+        :param options: Integer code for options
+        :param untyped_bytes: byte-string containing the untyped 32-bytes of data used by the tag for different options
+        """
         self.identifier = identifier
         self.bytes_per_value = bytes_per_value
         self.type_char = get_type_char_char(type_char)
@@ -23,6 +34,8 @@ class TimeBoxTag:
         )
         self.num_bytes_extra_information = 0
         self.data = None
+        self._encoded_data = None
+        self.num_points = None
 
         # options
         self.use_compression = False
@@ -33,9 +46,11 @@ class TimeBoxTag:
 
         # options data from untyped bytes
         # compression data
-        self.compressed_type_char = None
-        self.compressed_bytes_per_value = None
-        self.compression_mode = None
+        self._compressed_type_char = None
+        self._compressed_bytes_per_value = None
+        self._compression_mode = None
+        self._compression_reference_value = None
+        self._compression_reference_value_dtype = self.dtype
 
         # rounding data
         self.num_decimals_to_store = None
@@ -44,7 +59,7 @@ class TimeBoxTag:
             self._decode_def_bytes(untyped_bytes)
         return
 
-    def to_bytes(self, num_bytes_for_tag_identifier: int, tag_identifier_is_string: bool) -> NumBytesByteCodeTuple:
+    def info_to_bytes(self, num_bytes_for_tag_identifier: int, tag_identifier_is_string: bool) -> NumBytesByteCodeTuple:
         """
         Sends the tag definition to binary form.
         :param num_bytes_for_tag_identifier: number of bytes used in the unsigned int or unicode tag identifier
@@ -52,7 +67,6 @@ class TimeBoxTag:
         :return: namedtuple TagToBytesResult like ('num_bytes', 'byte_code')
         """
         options = np.uint16(self._encode_options())
-        def_bytes = self._encode_def_bytes()
         info = np.array(
             [(
                 self.identifier,
@@ -67,9 +81,46 @@ class TimeBoxTag:
                 exclude_trailing_bytes=True
             )
         )
+
+        self._encoded_data = None
+        self.encode_data()
+
+        def_bytes = self._encode_def_bytes()
         ret_bytes = info.tobytes() + def_bytes
         num_bytes = info.nbytes + 32
         return NumBytesByteCodeTuple(num_bytes=num_bytes, byte_code=ret_bytes)
+
+    def data_to_file(self, file_handle) -> int:
+        """
+        Sends the binary data to the file handle at the current seek position.
+        :param file_handle: file handle in mode 'wb' at the current seek position
+        :return: int number of bytes written
+        """
+        self.encode_data()
+        self._encoded_data.tofile(file_handle)
+        return self._encoded_data.nbytes
+
+    def fill_data_from_file(self, file_handle, num_points: int) -> int:
+        """
+        reads in tag data from file handle
+        :param file_handle: file handle in 'rb' mode at correct seek position
+        :param num_points: number of points to extract from the file
+        :return: int, num bytes read from file
+        """
+        self.num_points = num_points
+        read_num_points = num_points
+        read_dtype = self.dtype
+        if self.use_compression:
+            read_dtype = get_numpy_type(self._compressed_type_char, self._compressed_bytes_per_value * 8)
+            if self._compression_mode == 'e':
+                read_num_points -= 1
+        self._encoded_data = np.fromfile(
+            file_handle,
+            read_dtype,
+            count=read_num_points
+        )
+        self._decode_data()
+        return self._encoded_data.nbytes
 
     def _encode_options(self) -> int:
         """
@@ -107,12 +158,23 @@ class TimeBoxTag:
         ret_bytes = [b'\x00' for _ in range(0, 32)]
         counter = 0
         if self.use_compression:
-            ret_bytes[counter] = get_type_char_int(self.compression_mode).to_bytes(1, 'little')
+            ret_bytes[counter] = get_type_char_int(self._compression_mode).to_bytes(1, 'little')
             counter += 1
-            ret_bytes[counter] = self.compressed_bytes_per_value.to_bytes(1, 'little')
+            ret_bytes[counter] = self._compressed_bytes_per_value.to_bytes(1, 'little')
             counter += 1
-            ret_bytes[counter] = get_type_char_int(self.compressed_type_char).to_bytes(1, 'little')
+            ret_bytes[counter] = get_type_char_int(self._compressed_type_char).to_bytes(1, 'little')
             counter += 1
+            ret_bytes[counter] = self._compression_reference_value_dtype.itemsize.to_bytes(1, 'little')
+            counter += 1
+            ret_bytes[counter] = get_type_char_int(self._compression_reference_value_dtype.kind).to_bytes(1, 'little')
+            counter += 1
+            reference_value_bytes = np.array(
+                [self._compression_reference_value],
+                dtype=self._compression_reference_value_dtype
+            ).tobytes()
+            for i in range(0, len(reference_value_bytes)):
+                ret_bytes[counter] = reference_value_bytes[i].to_bytes(1, 'little')
+                counter += 1
         if self.floating_point_rounded:
             ret_bytes[counter] = self.num_decimals_to_store.to_bytes(1, 'little')
             counter += 1
@@ -126,14 +188,64 @@ class TimeBoxTag:
         """
         counter = 0
         if self.use_compression:
-            compression_info = np.frombuffer(from_bytes[counter:(counter+3)], dtype=np.uint8, count=3)
-            counter += 3
-            self.compression_mode = get_type_char_char(compression_info[0])
-            self.compressed_bytes_per_value = compression_info[1]
-            self.compressed_type_char = get_type_char_char(compression_info[2])
+            compression_info = np.frombuffer(from_bytes[counter:(counter+5)], dtype=np.uint8, count=5)
+            counter += 5
+            self._compression_mode = get_type_char_char(compression_info[0])
+            self._compressed_bytes_per_value = compression_info[1]
+            self._compressed_type_char = get_type_char_char(compression_info[2])
+            self._compression_reference_value_dtype = get_numpy_type(
+                get_type_char_char(compression_info[4]),
+                compression_info[3] * 8
+            )
+            ref_value_bytes = self.bytes_per_value
+            self._compression_reference_value = np.frombuffer(
+                from_bytes[counter:counter+ref_value_bytes],
+                dtype=self._compression_reference_value_dtype,
+                count=1
+            )[0]
+            counter += ref_value_bytes
         if self.floating_point_rounded:
             self.num_decimals_to_store = from_bytes[counter]
             counter += 1
+        return
+
+    def encode_data(self):
+        """
+        Performs compression and alteration on data to produce data set that will be written in binary to file
+        :return: None
+        """
+        if self._encoded_data is not None:
+            return
+
+        self._encoded_data = self.data
+        if self.floating_point_rounded:
+            self._encoded_data *= pow(10, self.num_decimals_to_store)
+            self._encoded_data = np.around(self._encoded_data).astype(np.int64)
+        if self.use_compression:
+            self._compression_reference_value_dtype = self._encoded_data.dtype
+            mode = 'm' if self._compression_mode is None else self._compression_mode
+            compression_result = compress_array(self._encoded_data, mode)
+            self._compression_mode = mode
+            self._compressed_type_char = compression_result.numpy_array.dtype.kind
+            self._compressed_bytes_per_value = compression_result.numpy_array.itemsize
+            self._encoded_data = compression_result.numpy_array
+            self._compression_reference_value = compression_result.reference_value
+        return
+
+    def _decode_data(self):
+        """
+        Decodes the data from a file buffer
+        :return:
+        """
+        self.data = self._encoded_data
+        if self.use_compression:
+            self.data = decompress_array(
+                self.data,
+                self._compression_mode,
+                self._compression_reference_value
+            ).astype(self.dtype)
+        if self.floating_point_rounded:
+            self.data /= pow(10, self.num_decimals_to_store)
         return
 
     @classmethod
@@ -228,7 +340,10 @@ class TimeBoxTag:
         :param tag_identifier_is_string: if True, tag identifier will be treated as 4-byte unicode. if False, int
         :return: NumBytesByteCodeTuple object, summed/joined across the tags
         """
-        tags_to_bytes_result = [t.to_bytes(num_bytes_for_tag_identifier, tag_identifier_is_string) for t in tag_list]
+        tags_to_bytes_result = [
+            t.info_to_bytes(num_bytes_for_tag_identifier, tag_identifier_is_string)
+            for t in tag_list
+            ]
         num_bytes = sum([r[0] for r in tags_to_bytes_result])
         byte_code = b''.join([r[1] for r in tags_to_bytes_result])
         return NumBytesByteCodeTuple(num_bytes=num_bytes, byte_code=byte_code)

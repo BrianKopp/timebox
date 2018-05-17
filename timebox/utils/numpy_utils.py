@@ -1,7 +1,11 @@
 import numpy as np
-from .binary import determine_required_bytes_unsigned_integer
+from .binary import determine_required_bytes_unsigned_integer, determine_required_bytes_signed_integer
 from .validation import ensure_int
 from .exceptions import *
+from collections import namedtuple
+
+
+CompressionResult = namedtuple('CompressionResult', ['numpy_array', 'reference_value'])
 
 
 def get_type_char_int(type_char_or_int):
@@ -180,14 +184,14 @@ def compress_float_array(arr: np.array) -> np.array:
     return arr
 
 
-def compress_array(arr: np.array, mode: str):
+def compress_array(arr: np.array, mode: str) -> CompressionResult:
     """
     compresses the array by finding the minimum value.
-    if mode is 'e', the input array must have a >= derivative, and then differences between elements are stored
+    if mode is 'e', the differences between elements are stored
     if mode is 'm', the returned array holds the difference from minimum
     :param arr: numpy source array
     :param mode: string, must be 'e' or 'm'. 'e' is differences between elements, 'm' is difference from minimum
-    :return: tuple like numpy array, value. if mode='e', array has 1 fewer elements than arr
+    :return: CompressionResult named-tuple like numpy array, value. if mode='e', array has 1 fewer elements than arr
     and value is the starting value. If mode='m', value is minimum
     """
     if mode not in ['e', 'm']:
@@ -207,25 +211,53 @@ def compress_array(arr: np.array, mode: str):
     if arr.size == 1 and mode == 'e':
         return arr
 
+    reference_value = arr[0] if mode == 'e' else np.amin(arr)
     # else, continue on
-    min_value = np.amin(arr)
     diff_array = None
     if mode == 'e':
         diff_array = np.ediff1d(arr)
-        # ensure ret_array only has positive values
-        if np.amin(diff_array) < 0:
-            raise CompressionError('Unable to compress using ''e'' difference between elements. '
-                                   'Negative derivative found.')
+
     if mode == 'm':
-        diff_array = arr - min_value
+        diff_array = arr - reference_value
 
     # calculate the size of data needed
     max_value = np.amax(diff_array)
+    min_value = np.amin(diff_array)
     ret_array = None
     if diff_array.dtype.kind in ['u', 'i']:  # integer or unsigned integer
-        num_bytes = determine_required_bytes_unsigned_integer(max_value)
-        ret_array = diff_array.astype(get_numpy_type('u', num_bytes * 8))
+        if min_value < 0 and (-1 * min_value) > max_value:
+            max_abs_value = -1 * min_value
+        else:
+            max_abs_value = max_value
+        type_char = 'i' if min_value < 0 else 'u'
+        if min_value < 0:
+            num_bytes = determine_required_bytes_signed_integer(max_abs_value)
+        else:
+            num_bytes = determine_required_bytes_unsigned_integer(max_abs_value)
+        ret_array = diff_array.astype(get_numpy_type(type_char, num_bytes * 8))
     if diff_array.dtype.kind == 'f':  # float
         # try to convert the array
         ret_array = compress_float_array(diff_array)
-    return (ret_array, min_value) if mode == 'm' else (ret_array, arr[0])
+    return CompressionResult(ret_array, reference_value)
+
+
+def decompress_array(arr: np.array, mode: str, reference_value) -> np.array:
+    """
+    Decodes a numpy array using a specified mode and reference value.
+    :param arr: array to decompress
+    :param mode: either 'e' for element-wise differences or 'm' for difference from minimum
+    :param reference_value: first value of decompressed array if 'e', else the min value of the decompressed array
+    :return: numpy array with decompressed data
+    """
+    if mode not in ['e', 'm']:
+        raise CompressionModeInvalidError('Mode must be "e" or "m", {} found'.format(mode))
+
+    if arr.dtype.kind not in ['f', 'u', 'i']:
+        raise CompressionError('Could not compress. dtype kind {} not '
+                               'eligible for compression.'.format(arr.dtype.kind))
+    if mode == 'e':
+        ret_array = np.cumsum(arr) + reference_value
+        ret_array = np.insert(ret_array, 0, reference_value)
+    elif mode == 'm':
+        ret_array = np.add(arr, np.full(arr.shape, reference_value))
+    return ret_array

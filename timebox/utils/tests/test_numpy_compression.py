@@ -9,15 +9,13 @@ class TestNumpyCompression(unittest.TestCase):
         data = np.array([1, -2, 3, 4], dtype=np.int32)
         with self.assertRaises(CompressionModeInvalidError):
             compress_array(data, 'bad_mode')
-        with self.assertRaises(CompressionError):
-            compress_array(data, 'e')  # negative derivative
         return
 
     def test_compress_data_zero(self):
         data = np.array([1, 2, 3, 4], dtype=np.uint32)
         compression_result = compress_array(data, 'e')
-        c_arr = compression_result[0]
-        self.assertEqual(1, compression_result[1])
+        c_arr = compression_result.numpy_array
+        self.assertEqual(1, compression_result.reference_value)
         self.assertEqual(1, c_arr.itemsize)
         self.assertEqual(3, c_arr.size)
         self.assertEqual(1, c_arr[0])
@@ -38,8 +36,8 @@ class TestNumpyCompression(unittest.TestCase):
     def test_compress_data_one(self):
         data = np.array([-4, -2, 0, 2000], dtype=np.int16)
         compression_result = compress_array(data, 'e')
-        c_arr = compression_result[0]
-        self.assertEqual(-4, compression_result[1])
+        c_arr = compression_result.numpy_array
+        self.assertEqual(-4, compression_result.reference_value)
         self.assertEqual(2, c_arr.itemsize)
         self.assertEqual(3, c_arr.size)
         self.assertEqual(2, c_arr[0])
@@ -47,8 +45,8 @@ class TestNumpyCompression(unittest.TestCase):
         self.assertEqual(2000, c_arr[2])
 
         compression_result = compress_array(data, 'm')
-        c_arr = compression_result[0]
-        self.assertEqual(-4, compression_result[1])
+        c_arr = compression_result.numpy_array
+        self.assertEqual(-4, compression_result.reference_value)
         self.assertEqual(2, c_arr.itemsize)
         self.assertEqual(4, c_arr.size)
         self.assertEqual(0, c_arr[0])
@@ -60,8 +58,8 @@ class TestNumpyCompression(unittest.TestCase):
     def test_compress_data_two(self):
         data = np.array([5.2, 0.8, 3.1415, 8], dtype=np.float64)
         compression_result = compress_array(data, 'm')
-        c_arr = compression_result[0]
-        self.assertEqual(0.8, compression_result[1])
+        c_arr = compression_result.numpy_array
+        self.assertEqual(0.8, compression_result.reference_value)
         self.assertEqual(8, c_arr.itemsize)
         self.assertEqual(4, c_arr.size)
         self.assertEqual(4.4, c_arr[0])
@@ -74,8 +72,8 @@ class TestNumpyCompression(unittest.TestCase):
         data = np.array([2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048,
                          4096, 8192, 16384, 32768, 65536], dtype=np.float64)
         compression_result = compress_array(data, 'e')
-        c_arr = compression_result[0]
-        self.assertEqual(2, compression_result[1])
+        c_arr = compression_result.numpy_array
+        self.assertEqual(2, compression_result.reference_value)
         self.assertEqual(2, c_arr.itemsize)
         self.assertEqual(15, c_arr.size)
         self.assertEqual(2, c_arr[0])
@@ -95,14 +93,37 @@ class TestNumpyCompression(unittest.TestCase):
         self.assertEqual(32768, c_arr[14])
 
         compression_result = compress_array(data, 'm')
-        c_arr = compression_result[0]
-        self.assertEqual(2, compression_result[1])
+        c_arr = compression_result.numpy_array
+        self.assertEqual(2, compression_result.reference_value)
         self.assertEqual(4, c_arr.itemsize)
         self.assertEqual(16, c_arr.size)
         self.assertEqual(0, c_arr[0])
         self.assertEqual(2, c_arr[1])
         self.assertEqual(6, c_arr[2])
         self.assertEqual(65536 - 2, c_arr[15])
+        return
+
+    def test_compress_data_four(self):
+        data = np.array([10, -2, 0, -2000], dtype=np.int16)
+        compression_result = compress_array(data, 'e')
+        c_arr = compression_result.numpy_array
+        self.assertEqual(10, compression_result.reference_value)
+        self.assertEqual(2, c_arr.itemsize)
+        self.assertEqual(3, c_arr.size)
+        self.assertEqual(-12, c_arr[0])
+        self.assertEqual(2, c_arr[1])
+        self.assertEqual(-2000, c_arr[2])
+
+        data = np.array([10, -2, 0, 2000], dtype=np.int16)
+        compression_result = compress_array(data, 'm')
+        c_arr = compression_result.numpy_array
+        self.assertEqual(-2, compression_result.reference_value)
+        self.assertEqual(2, c_arr.itemsize)
+        self.assertEqual(4, c_arr.size)
+        self.assertEqual(12, c_arr[0])
+        self.assertEqual(0, c_arr[1])
+        self.assertEqual(2, c_arr[2])
+        self.assertEqual(2002, c_arr[3])
         return
 
     def test_compress_tiny_arrays(self):

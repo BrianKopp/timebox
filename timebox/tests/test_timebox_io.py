@@ -3,6 +3,7 @@ from timebox.exceptions import *
 from timebox.timebox_tag import TimeBoxTag
 import unittest
 import numpy as np
+import pandas as pd
 import os
 import fcntl
 
@@ -144,6 +145,18 @@ class TestTimeBoxReadWrite(unittest.TestCase):
 
         self.assertFalse(os.path.exists(block_file))
         os.remove(file_name)
+        return
+
+    def test_read_save_read_save(self):
+        tb_file_name = 'timebox/tests/data/test_tb_io.npb'
+        df = pd.read_csv('timebox/tests/data/ETH-USD_integers.csv', index_col=0)
+        tb = TimeBox.save_pandas(df, tb_file_name)
+        tb2 = TimeBox(tb.file_path)
+        tb2.read()
+        tb2.write()
+        tb2.read()
+        tb.read()
+        os.remove(tb_file_name)
         return
 
     def test_bad_arguments(self):

@@ -14,9 +14,12 @@ coverage run -a --omit "venv/*" -m timebox.tests.test_timebox_file_info
 coverage run -a --omit "venv/*" -m timebox.tests.test_timebox_io
 coverage run -a --omit "venv/*" -m timebox.tests.test_timebox_pandas
 coverage run -a --omit "venv/*" -m timebox.tests.test_timebox_tag
+coverage run -a --omit "venv/*" -m timebox.tests.test_timebox_tag_compression
+
 coverage run -a --omit "venv/*" -m timebox.utils.tests.test_binary
 coverage run -a --omit "venv/*" -m timebox.utils.tests.test_datetime_utils
 coverage run -a --omit "venv/*" -m timebox.utils.tests.test_numpy_compression
+coverage run -a --omit "venv/*" -m timebox.utils.tests.test_numpy_decompression
 coverage run -a --omit "venv/*" -m timebox.utils.tests.test_numpy_float_compression
 coverage run -a --omit "venv/*" -m timebox.utils.tests.test_numpy_utils
 coverage run -a --omit "venv/*" -m timebox.utils.tests.test_pandas_utils

@@ -86,7 +86,6 @@ class TimeBox:
         Populates a pandas data frame and returns it.
         :return: Pandas DataFrame
         """
-        # check if haven't read
         if len([t for t in self._tags if self._tags[t].data is None]) == 0:
             self.read()
         data = [(t, self._tags[t].data) for t in self._tags]
@@ -304,8 +303,7 @@ class TimeBox:
 
         # then write out file data
         for t in self._tags:
-            seek_bytes += self._tags[t].data.nbytes
-            self._tags[t].data.tofile(file_handle)
+            seek_bytes += self._tags[t].data_to_file(file_handle)
         return seek_bytes
 
     def _read_tag_data(self, file_handle) -> int:
@@ -316,12 +314,7 @@ class TimeBox:
         """
         seek_bytes = 0
         for t in self._tags:
-            seek_bytes += self._num_points * self._tags[t].bytes_per_value
-            self._tags[t].data = np.fromfile(
-                file_handle,
-                dtype=get_numpy_type(self._tags[t].type_char, 8 * self._tags[t].bytes_per_value),
-                count=self._num_points
-            )
+            seek_bytes += self._tags[t].fill_data_from_file(file_handle, self._num_points)
         return seek_bytes
 
     def _write_date_deltas(self, file_handle) -> int:

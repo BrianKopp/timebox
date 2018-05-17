@@ -9,7 +9,7 @@ import os
 class TestTimeBoxPandas(unittest.TestCase):
     def test_save_pandas(self):
         file_name = 'save_pandas.npb'
-        df = pd.read_csv('timebox/tests/ETH-USD_combined_utc.csv', index_col=0)
+        df = pd.read_csv('timebox/tests/data/ETH-USD_combined_utc.csv', index_col=0)
         tb = TimeBox.save_pandas(df, file_name)
         self.assertTrue(os.path.exists(file_name))
 
