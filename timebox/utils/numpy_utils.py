@@ -261,3 +261,15 @@ def decompress_array(arr: np.array, mode: str, reference_value) -> np.array:
     elif mode == 'm':
         ret_array = np.add(arr, np.full(arr.shape, reference_value))
     return ret_array
+
+
+def round_array_returning_integers(arr: np.array, num_decimals: int) -> np.array:
+    """
+    Multiplies the array by 10^num_decimals, rounds the array, and returns an integer array
+    :param arr: source array
+    :param num_decimals: number of decimals to keep
+    :return: 64-bit integer array with rounded data
+    """
+    rounded_array = arr * pow(10, num_decimals)
+    rounded_array = np.around(rounded_array)
+    return rounded_array.astype(np.int64)

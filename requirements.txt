@@ -1,0 +1,11 @@
+arrow==0.12.1
+bottle==0.12.13
+coverage==4.5.1
+CProfileV==1.0.7
+numexpr==2.6.5
+numpy==1.14.3
+pandas==0.22.0
+pkg-resources==0.0.0
+python-dateutil==2.7.2
+pytz==2018.4
+six==1.11.0
