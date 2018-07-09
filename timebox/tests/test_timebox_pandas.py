@@ -4,6 +4,7 @@ import pandas as pd
 import numpy as np
 import unittest
 import os
+import logging
 
 
 class TestTimeBoxPandas(unittest.TestCase):
@@ -34,6 +35,31 @@ class TestTimeBoxPandas(unittest.TestCase):
         )
         with self.assertRaises(InvalidPandasIndexError):
             TimeBox.save_pandas(df, 'not_going_to_save.npb')
+        return
+
+    def test_io_pandas(self):
+        file_name = 'save_pandas.npb'
+        df = pd.read_csv('timebox/tests/data/test1.csv').set_index('date')
+        logging.debug('Starting test_io_pandas with df\n{}'.format(df))
+        tb = TimeBox.save_pandas(df, file_name)
+        tb_read = TimeBox(file_name)
+        df2 = tb_read.to_pandas()
+        self.assertListEqual(list(df.columns.sort_values()), list(df2.columns.sort_values()))
+
+        df = df.sort_index()
+        # ensure index is same
+        for i in range(0, len(df.index)):
+            self.assertEqual(pd.to_datetime(df.index[i]), pd.to_datetime(df2.index[i]))
+
+        # ensure each value is the same
+        columns = df.columns
+        for c in columns:
+            logging.debug('Testing column: {}'.format(c))
+            logging.debug('Original frame:{}'.format(df[c]))
+            logging.debug('TB frame:{}'.format(df2[c]))
+            self.assertEqual(df[c].sum(), df2[c].sum())
+
+        os.remove(file_name)
         return
 
 if __name__ == '__main__':

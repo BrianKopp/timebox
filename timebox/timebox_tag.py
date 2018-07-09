@@ -1,4 +1,5 @@
 import numpy as np
+import logging
 from collections import namedtuple
 from typing import Union
 from timebox.utils.numpy_utils import get_numpy_type, get_type_char_char,\
@@ -81,6 +82,10 @@ class TimeBoxTag:
                 exclude_trailing_bytes=True
             )
         )
+        logging.debug('Sending tag "{}" info to bytes.'.format(self.identifier))
+        logging.debug('Bytes per value: {}'.format(self.bytes_per_value))
+        logging.debug('Type char: {}'.format(self.type_char))
+        logging.debug('Num bytes extra info: {}'.format(self.num_bytes_extra_information))
 
         self._encoded_data = None
         self.encode_data()
@@ -178,6 +183,12 @@ class TimeBoxTag:
         if self.floating_point_rounded:
             ret_bytes[counter] = self.num_decimals_to_store.to_bytes(1, 'little')
             counter += 1
+        logging.debug('Encoded definition:')
+        logging.debug('\tCompression mode: {}'.format(self._compression_mode))
+        logging.debug('\tCompression bytes: {}'.format(self._compressed_bytes_per_value))
+        logging.debug('\tCompression type char: {}'.format(self._compressed_type_char))
+        logging.debug('\tCompression ref val: {}'.format(self._compression_reference_value))
+        logging.debug('\tCompression ref val dtype: {}'.format(self._compression_reference_value_dtype))
         return b''.join(ret_bytes)
 
     def _decode_def_bytes(self, from_bytes: bytes):
@@ -207,6 +218,12 @@ class TimeBoxTag:
         if self.floating_point_rounded:
             self.num_decimals_to_store = from_bytes[counter]
             counter += 1
+        logging.debug('Decoded definition for tag: {}'.format(self.identifier))
+        logging.debug('\tCompression mode: {}'.format(self._compression_mode))
+        logging.debug('\tCompression bytes: {}'.format(self._compressed_bytes_per_value))
+        logging.debug('\tCompression type char: {}'.format(self._compressed_type_char))
+        logging.debug('\tCompression ref val: {}'.format(self._compression_reference_value))
+        logging.debug('\tCompression ref val dtype: {}'.format(self._compression_reference_value_dtype))
         return
 
     def encode_data(self):
@@ -340,6 +357,7 @@ class TimeBoxTag:
         :param tag_identifier_is_string: if True, tag identifier will be treated as 4-byte unicode. if False, int
         :return: NumBytesByteCodeTuple object, summed/joined across the tags
         """
+        logging.debug('converting tags to bytes: {}'.format([t.identifier for t in tag_list]))
         tags_to_bytes_result = [
             t.info_to_bytes(num_bytes_for_tag_identifier, tag_identifier_is_string)
             for t in tag_list

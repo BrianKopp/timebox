@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import os
 import time
+import logging
 from fcntl import flock, LOCK_EX, LOCK_SH, LOCK_UN, LOCK_NB
 from timebox.utils.datetime_utils import compress_time_delta_array, get_unit_data
 from timebox.utils.numpy_utils import *
@@ -62,14 +63,19 @@ class TimeBox:
         :return: TimeBox object
         """
         # make sure the pandas data frame is sorted on date
+        logging.debug('Before sorting: {}'.format(df.head()))
         df = df.sort_index()
+        logging.debug('After sorting: {}'.format(df.head()))
 
         tb = TimeBox()
         tb._tag_names_are_strings = True
 
         # ensure index is there and can be converted to numpy array of datetime64s
+        logging.debug('Datetime index dtype before and after:\n{}'.format(df.index.dtype))
         tb._dates = df.index.values.astype(np.datetime64)
+        logging.debug('after: {}'.format(tb._dates.dtype))
         tb._start_date = np.amin(tb._dates.astype(np.dtype('datetime64[s]')))
+        logging.debug('Min date: {}'.format(tb._start_date))
         tb._date_differentials_stored = True
         tb._num_points = tb._dates.size
 
@@ -102,7 +108,8 @@ class TimeBox:
         with self._get_fcntl_lock('r') as handle:
             try:
                 # read in the data
-                self._read_file_info(handle)
+                nb = self._read_file_info(handle)
+                logging.debug('Read num bytes in file info: {}'.format(nb))
 
                 if self._date_differentials_stored:
                     self._read_date_deltas(handle)
@@ -131,7 +138,9 @@ class TimeBox:
                     self._calculate_date_differentials()
                     self._compress_date_differentials()
 
-                self._write_file_info(handle)
+                logging.debug('Writing file info')
+                num_bytes_in_file_info = self._write_file_info(handle)
+                logging.debug('Num bytes in file info: {}'.format(num_bytes_in_file_info))
 
                 if self._date_differentials_stored:
                     self._write_date_deltas(handle)
@@ -244,8 +253,9 @@ class TimeBox:
         np.array([np.uint8(self._num_bytes_for_tag_identifier)], dtype=np.uint8).tofile(file_handle)
         bytes_seek = 1 + 2 + 1 + 4 + 1
 
+        sorted_tags = sorted([t for t in self._tags])
         tags_to_bytes_result = TimeBoxTag.tag_list_to_bytes(
-            [self._tags[t] for t in self._tags],
+            [self._tags[t] for t in sorted_tags],
             self._num_bytes_for_tag_identifier,
             self._tag_names_are_strings
         )
@@ -302,7 +312,10 @@ class TimeBox:
         seek_bytes = 0
 
         # then write out file data
-        for t in self._tags:
+        logging.debug('Writing tag data:')
+        sorted_tags = sorted([t for t in self._tags])
+        for t in sorted_tags:
+            logging.debug('\tTag: {}'.format(t))
             seek_bytes += self._tags[t].data_to_file(file_handle)
         return seek_bytes
 
@@ -313,7 +326,8 @@ class TimeBox:
         :return: int, seek bytes advanced in this method
         """
         seek_bytes = 0
-        for t in self._tags:
+        sorted_tags = sorted([t for t in self._tags])
+        for t in sorted_tags:
             seek_bytes += self._tags[t].fill_data_from_file(file_handle, self._num_points)
         return seek_bytes
 
@@ -351,8 +365,10 @@ class TimeBox:
         Calculates the date differentials array from the _dates array
         :return: void
         """
+        logging.debug('Calculating date differentials')
         self._start_date = np.amin(self._dates)
         differences = np.ediff1d(self._dates)
+        logging.debug('Date differences: {}'.format(differences))
         # ensure that the dates are sorted
         if np.amin(differences).astype(np.int64) < 0:
             raise DateDataError('Dates were not in order')
@@ -365,13 +381,18 @@ class TimeBox:
         then the actual array is compressed
         :return: void
         """
+        logging.debug('Compressing date differentials')
         result = compress_time_delta_array(self._date_differentials)
+        logging.debug('Compressed time delta array: {}'.format(result))
         unit_data = get_unit_data(result[1])
         self._date_differential_units = unit_data.order
         max_diff = np.amax(result[0])
         bytes_needed = determine_required_bytes_unsigned_integer(max_diff)
         self._date_differentials = result[0].astype(get_numpy_type('u', 8 * bytes_needed))
         self._bytes_per_date_differential = bytes_needed
+        logging.debug('Date differentials:\n{}'.format(self._date_differentials))
+        logging.debug('Date units:\n{}'.format(self._date_differential_units))
+        logging.debug('Bytes per date diff:\n{}'.format(self._bytes_per_date_differential))
         return
 
     def _blocking_file_name(self) -> str:
